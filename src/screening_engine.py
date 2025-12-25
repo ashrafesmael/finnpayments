@@ -166,7 +166,7 @@ class ScreeningEngine:
         
         # Adjust risks based on jurisdiction
         if fatf_result["is_high_risk"]:
-            sanctions_risk = max(sanctions_risk, jurisdiction_risk)
+            # Removed: jurisdiction should not inflate sanctions risk
             logger.warning(f"⚠️ High-risk jurisdiction: {fatf_result['country']} - {fatf_result['reason']}")
         
         # Combine risks with weighted scoring
@@ -341,8 +341,11 @@ Search Results:
 
 IMPORTANT NOTES:
 - Mauritius was REMOVED from the grey list in October 2021 - do NOT include it
+- South Africa was REMOVED from the grey list in October 2025 - do NOT include it
+- Mali and Tanzania were REMOVED from the grey list in June 2025 - do NOT include them
 - The black list (Call for Action) typically includes: North Korea, Iran, Myanmar
 - The grey list changes frequently - only include countries explicitly mentioned as CURRENTLY on the list
+- As of October 2025, grey list includes: Algeria, Angola, Bolivia, Bulgaria, Cameroon, Côte d'Ivoire, DRC, Haiti, Kenya, Lao PDR, Lebanon, Monaco, Namibia, Nepal, South Sudan, Syria, Venezuela, Vietnam, Virgin Islands (UK), Yemen
 
 Return ONLY a valid JSON object:
 {{
@@ -377,7 +380,7 @@ Be conservative - only include countries you are confident are CURRENTLY on the 
                     if c.get("country", "").upper() != "MAURITIUS"
                 ]
                 
-                # If grey list is empty, use known current list (as of Nov 2025)
+                # If grey list is empty, use known current list (as of Oct 2025 - South Africa REMOVED)
                 if not fatf_data.get("grey_list"):
                     logger.info("⚠️ LLM returned empty grey list, using known current list")
                     fatf_data["grey_list"] = [
@@ -458,23 +461,22 @@ Be conservative - only include countries you are confident are CURRENTLY on the 
         # Fetch live FATF data
         live_data = self._fetch_live_fatf_data()
         
-        # Use live data if available, otherwise fallback to cached
-        if live_data:
-            fatf_data = live_data
-        else:
-            fatf_data = self.fatf_database.get("high_risk_jurisdictions", {})
-            if not fatf_data:
-                # Try loading cached live data
-                try:
-                    cache_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'fatf_high_risk_cache.json')
-                    if os.path.exists(cache_path):
-                        with open(cache_path, 'r') as f:
-                            fatf_data = json.load(f)
-                except:
-                    pass
+        # ALWAYS require live data - no cache fallback for compliance accuracy
+        if not live_data:
+            logger.error(f"❌ FATF live check failed for {nationality} - unable to verify jurisdiction risk")
+            return {
+                "is_high_risk": False,
+                "risk_level": "unknown",
+                "country": nationality,
+                "reason": "FATF live check unavailable - manual verification required",
+                "risk_score": 0,
+                "source": "FATF Live Check FAILED",
+                "error": True,
+                "error_message": "Unable to fetch live FATF data. Please verify jurisdiction risk manually."
+            }
         
-        if not fatf_data:
-            return result
+        fatf_data = live_data
+        
         
         # Check Call for Action / Black List countries (highest risk)
         call_for_action = fatf_data.get("call_for_action", [])

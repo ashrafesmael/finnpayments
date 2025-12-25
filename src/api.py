@@ -310,6 +310,9 @@ async def analyze_entity_manual(request: AnalysisRequest):
         
         # Perform screening - include additional_info from request (e.g., nationality for FATF check)
         additional_context = {"manual_analysis": True}
+        # Add country as nationality for FATF jurisdiction check
+        if hasattr(request, 'country') and request.country:
+            additional_context["nationality"] = request.country
         if request.additional_info:
             additional_context.update(request.additional_info)
         

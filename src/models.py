@@ -164,7 +164,8 @@ class AnalysisRequest(BaseModel):
     """Request model for manual analysis"""
     entity_name: str
     entity_type: str = "individual"
-    screening_provider: str = "dilisense"  # Options: "worldcheck", "dilisense"
+    screening_provider: str = "dilisense"
+    country: Optional[str] = None  # Options: "worldcheck", "dilisense"
     additional_info: Optional[Dict[str, Any]] = None
 
 

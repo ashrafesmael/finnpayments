@@ -1,5 +1,5 @@
 {
-  "last_updated": "2025-11",
+  "last_updated": "2025-10",
   "call_for_action": [
     {
       "country": "North Korea",
@@ -33,15 +33,23 @@
         "DZ",
         "DZA"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Angola",
       "codes": [
         "AO",
-        "AGO"
+        "ANG"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
+    },
+    {
+      "country": "Bolivia",
+      "codes": [
+        "BO",
+        "BOL"
+      ],
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Bulgaria",
@@ -49,15 +57,7 @@
         "BG",
         "BGR"
       ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "Burkina Faso",
-      "codes": [
-        "BF",
-        "BFA"
-      ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Cameroon",
@@ -65,7 +65,7 @@
         "CM",
         "CMR"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "C\u00f4te d'Ivoire",
@@ -73,23 +73,15 @@
         "CI",
         "CIV"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
-      "country": "Croatia",
-      "codes": [
-        "HR",
-        "HRV"
-      ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "Democratic Republic of Congo",
+      "country": "DRC",
       "codes": [
         "CD",
         "COD"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Haiti",
@@ -97,7 +89,7 @@
         "HT",
         "HTI"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Kenya",
@@ -105,15 +97,23 @@
         "KE",
         "KEN"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
-      "country": "Mali",
+      "country": "Lao PDR",
       "codes": [
-        "ML",
-        "MLI"
+        "LA",
+        "LAO"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
+    },
+    {
+      "country": "Lebanon",
+      "codes": [
+        "LB",
+        "LBN"
+      ],
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Monaco",
@@ -121,15 +121,7 @@
         "MC",
         "MCO"
       ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "Mozambique",
-      "codes": [
-        "MZ",
-        "MOZ"
-      ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Namibia",
@@ -137,39 +129,15 @@
         "NA",
         "NAM"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
-      "country": "Nigeria",
+      "country": "Nepal",
       "codes": [
-        "NG",
-        "NGA"
+        "NP",
+        "NPL"
       ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "Philippines",
-      "codes": [
-        "PH",
-        "PHL"
-      ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "Senegal",
-      "codes": [
-        "SN",
-        "SEN"
-      ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "South Africa",
-      "codes": [
-        "ZA",
-        "ZAF"
-      ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "South Sudan",
@@ -177,7 +145,7 @@
         "SS",
         "SSD"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Syria",
@@ -185,15 +153,7 @@
         "SY",
         "SYR"
       ],
-      "reason": "Under increased monitoring"
-    },
-    {
-      "country": "Tanzania",
-      "codes": [
-        "TZ",
-        "TZA"
-      ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Venezuela",
@@ -201,7 +161,7 @@
         "VE",
         "VEN"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Vietnam",
@@ -209,7 +169,15 @@
         "VN",
         "VNM"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
+    },
+    {
+      "country": "Virgin Islands (UK)",
+      "codes": [
+        "VG",
+        "VGB"
+      ],
+      "reason": "Strategic deficiencies in AML/CFT regime"
     },
     {
       "country": "Yemen",
@@ -217,7 +185,7 @@
         "YE",
         "YEM"
       ],
-      "reason": "Under increased monitoring"
+      "reason": "Strategic deficiencies in AML/CFT regime"
     }
   ]
 }
