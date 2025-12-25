@@ -1,5 +1,5 @@
 """
-Authentication API endpoints for VORTEX-AML
+Authentication API endpoints for finnverify
 """
 from fastapi import APIRouter, HTTPException, Depends, Header
 from typing import Optional

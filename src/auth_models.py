@@ -1,5 +1,5 @@
 """
-Authentication models and database for VORTEX-AML
+Authentication models and database for finnverify
 """
 import uuid
 import hashlib
