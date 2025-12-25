@@ -380,40 +380,15 @@ Be conservative - only include countries you are confident are CURRENTLY on the 
                     if c.get("country", "").upper() != "MAURITIUS"
                 ]
                 
-                # If grey list is empty, use known current list (as of Oct 2025 - South Africa REMOVED)
-                if not fatf_data.get("grey_list"):
-                    logger.info("⚠️ LLM returned empty grey list, using known current list")
-                    fatf_data["grey_list"] = [
-                        {"country": "Algeria", "codes": ["DZ", "DZA"], "reason": "Under increased monitoring"},
-                        {"country": "Angola", "codes": ["AO", "AGO"], "reason": "Under increased monitoring"},
-                        {"country": "Bulgaria", "codes": ["BG", "BGR"], "reason": "Under increased monitoring"},
-                        {"country": "Burkina Faso", "codes": ["BF", "BFA"], "reason": "Under increased monitoring"},
-                        {"country": "Cameroon", "codes": ["CM", "CMR"], "reason": "Under increased monitoring"},
-                        {"country": "Côte d'Ivoire", "codes": ["CI", "CIV"], "reason": "Under increased monitoring"},
-                        {"country": "Croatia", "codes": ["HR", "HRV"], "reason": "Under increased monitoring"},
-                        {"country": "Democratic Republic of Congo", "codes": ["CD", "COD"], "reason": "Under increased monitoring"},
-                        {"country": "Haiti", "codes": ["HT", "HTI"], "reason": "Under increased monitoring"},
-                        {"country": "Kenya", "codes": ["KE", "KEN"], "reason": "Under increased monitoring"},
-                        {"country": "Mali", "codes": ["ML", "MLI"], "reason": "Under increased monitoring"},
-                        {"country": "Monaco", "codes": ["MC", "MCO"], "reason": "Under increased monitoring"},
-                        {"country": "Mozambique", "codes": ["MZ", "MOZ"], "reason": "Under increased monitoring"},
-                        {"country": "Namibia", "codes": ["NA", "NAM"], "reason": "Under increased monitoring"},
-                        {"country": "Nigeria", "codes": ["NG", "NGA"], "reason": "Under increased monitoring"},
-                        {"country": "Philippines", "codes": ["PH", "PHL"], "reason": "Under increased monitoring"},
-                        {"country": "Senegal", "codes": ["SN", "SEN"], "reason": "Under increased monitoring"},
-                        {"country": "South Africa", "codes": ["ZA", "ZAF"], "reason": "Under increased monitoring"},
-                        {"country": "South Sudan", "codes": ["SS", "SSD"], "reason": "Under increased monitoring"},
-                        {"country": "Syria", "codes": ["SY", "SYR"], "reason": "Under increased monitoring"},
-                        {"country": "Tanzania", "codes": ["TZ", "TZA"], "reason": "Under increased monitoring"},
-                        {"country": "Venezuela", "codes": ["VE", "VEN"], "reason": "Under increased monitoring"},
-                        {"country": "Vietnam", "codes": ["VN", "VNM"], "reason": "Under increased monitoring"},
-                        {"country": "Yemen", "codes": ["YE", "YEM"], "reason": "Under increased monitoring"}
-                    ]
+                # If grey list is empty, return error - no fallback to avoid outdated data
+                if not fatf_data.get("grey_list") and not fatf_data.get("call_for_action"):
+                    logger.error("❌ LLM returned empty FATF lists - cannot verify jurisdiction")
+                    return None
                 
                 logger.info(f"✅ LIVE FATF data: {len(fatf_data.get('call_for_action', []))} black list, {len(fatf_data.get('grey_list', []))} grey list countries")
                 
                 # Cache for fallback
-                self._cache_fatf_data(fatf_data)
+                # Caching disabled - always use live data
                 return fatf_data
                 
         except Exception as e:
