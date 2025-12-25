@@ -151,15 +151,72 @@ class ScreeningEngine:
         
         # Adjust risks based on Dilisense results
         if dilisense_result:
-            if dilisense_result["sanctions_hits"] > 0:
-                sanctions_risk = max(sanctions_risk, 90)
-                logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} SANCTIONS match for {name}")
-            if dilisense_result["pep_hits"] > 0:
-                pep_risk = max(pep_risk, 80)
-                logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} PEP match for {name}")
-            if dilisense_result["criminal_hits"] > 0:
+            total_hits = dilisense_result.get("total_hits", 0)
+            
+            # COMMON NAME DETECTION: If too many matches, results are unreliable
+            # More than 10 matches = common name, can't reliably identify individual
+            is_common_name = total_hits > 10
+            
+            if is_common_name:
+                logger.warning(f"⚠️ COMMON NAME: {name} has {total_hits} matches - cannot reliably identify. Manual verification required.")
+                # For common names, DO NOT auto-assign high risk - too many false positives
+                # Only flag if there's overwhelming evidence (>50% of matches are a specific category)
+                
+                if dilisense_result["sanctions_hits"] > 0:
+                    ratio = dilisense_result["sanctions_hits"] / total_hits
+                    if ratio > 0.5:  # More than half are sanctions = likely real
+                        sanctions_risk = max(sanctions_risk, 70)
+                    # Otherwise don't auto-assign - common name false positive
+                    
+                if dilisense_result["pep_hits"] > 0:
+                    ratio = dilisense_result["pep_hits"] / total_hits
+                    if ratio > 0.5:
+                        pep_risk = max(pep_risk, 60)
+                        
+                if dilisense_result["criminal_hits"] > 0:
+                    ratio = dilisense_result["criminal_hits"] / total_hits
+                    if ratio > 0.5:
+                        adverse_media_risk = max(adverse_media_risk, 50)
+            else:
+                # Specific name (few matches) - apply normal risk
+                if dilisense_result["sanctions_hits"] > 0:
+                    sanctions_risk = max(sanctions_risk, 90)
+                    logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} SANCTIONS match for {name}")
+                    
+                if dilisense_result["pep_hits"] > 0:
+                    pep_risk = max(pep_risk, 80)
+                    logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} PEP match for {name}")
+                    
+                if dilisense_result["criminal_hits"] > 0:
+                    adverse_media_risk = max(adverse_media_risk, 70)
+                    logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} CRIMINAL match for {name}")
+            
+            # Check adverse_media_hits from World Check
+            if dilisense_result.get("adverse_media_hits", 0) > 0:
                 adverse_media_risk = max(adverse_media_risk, 70)
-                logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} CRIMINAL match for {name}")
+                logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} ADVERSE MEDIA match for {name}")
+            
+            # Check special_interest_hits (regulatory enforcement, law enforcement)
+            if dilisense_result.get("special_interest_hits", 0) > 0:
+                adverse_media_risk = max(adverse_media_risk, 60)
+                logger.warning(f"⚠️ {dilisense_result.get('provider', 'AML Database')} SPECIAL INTEREST match for {name}")
+            
+            # CRITICAL: Check for financial crimes in record details - but NOT for common names
+            # For common names (>10 hits), records likely belong to different people
+            if not is_common_name:
+                financial_crime_keywords = ["FRAUD", "PONZI", "MONEY LAUNDERING", "EMBEZZLEMENT", "FINANCIAL CRIME", 
+                                           "SECURITIES FRAUD", "SEC", "CRIME - FINANCIAL", "CONVICTED", "PRISON", "SENTENCED"]
+                for record in dilisense_result.get("records", []):
+                    record_text = " ".join([
+                        str(record.get("sanction_details", "")),
+                        str(record.get("entity_type", "")),
+                        " ".join(record.get("positions", [])),
+                        " ".join(record.get("sources", []))
+                    ]).upper()
+                    if any(keyword in record_text for keyword in financial_crime_keywords):
+                        sanctions_risk = max(sanctions_risk, 70)  # Treat financial crimes seriously
+                        logger.warning(f"🚨 FINANCIAL CRIME indicators found for {name}: {record_text[:100]}")
+                        break
         
         # Get detailed adverse media info for LLM context
         adverse_media_details = self._search_adverse_media_google(name, nationality)
@@ -168,6 +225,28 @@ class ScreeningEngine:
         if fatf_result["is_high_risk"]:
             # Removed: jurisdiction should not inflate sanctions risk
             logger.warning(f"⚠️ High-risk jurisdiction: {fatf_result['country']} - {fatf_result['reason']}")
+        
+        # Check adverse media for financial crime indicators - only if specific to this person
+        # Be conservative for common names (many Dilisense hits = common name)
+        is_common_name = dilisense_result and dilisense_result.get("total_hits", 0) > 10
+        financial_crime_detected = False
+        
+        financial_crime_keywords = ["ponzi", "fraud", "money laundering", "embezzlement", "convicted", 
+                                   "sentenced", "prison", "sec violation", "securities fraud", "financial crime"]
+        if adverse_media_details and not is_common_name:
+            adverse_text = str(adverse_media_details).lower()
+            name_lower = name.lower()
+            # Only trigger if financial crime keywords appear AND the name is directly mentioned
+            # This prevents false positives from generic search results
+            name_parts = name_lower.split()
+            name_mentioned = any(part in adverse_text for part in name_parts if len(part) > 2)
+            
+            if name_mentioned and any(keyword in adverse_text for keyword in financial_crime_keywords):
+                # Financial crime evidence in media = HIGH risk
+                sanctions_risk = max(sanctions_risk, 70)
+                adverse_media_risk = max(adverse_media_risk, 100)
+                financial_crime_detected = True
+                logger.warning(f"🚨 FINANCIAL CRIME evidence in adverse media for {name}")
         
         # Combine risks with weighted scoring
         risks = {
@@ -1347,36 +1426,28 @@ Be thorough and base your assessment on factual information. If uncertain about 
                     "reference_id": reference_id
                 }
                 
-                # Categorize the match based on sourceCategories
-                if any(cat in category_str for cat in ["SANCTION", "SANCTIONS", "SAN"]):
+                
+                # Combine sourceCategories and positions for categorization
+                all_categories = category_str + " " + " ".join(positions).upper()
+                
+                # Categorize the match based on all available category info
+                if any(cat in all_categories for cat in ["SANCTION", "SANCTIONS", "SAN", "OFAC", "SDN"]):
                     screening_result["sanctions_hits"] += 1
                     record["source_type"] = "SANCTION"
-                elif any(cat in category_str for cat in ["PEP", "POLITICAL"]):
+                elif any(cat in all_categories for cat in ["PEP", "POLITICAL", "GOVERNMENT", "MINISTER", "PRESIDENT"]):
                     screening_result["pep_hits"] += 1
                     record["source_type"] = "PEP"
-                elif any(cat in category_str for cat in ["ADVERSE", "AME", "CRIME", "CRIMINAL", "TERROR"]):
+                elif any(cat in all_categories for cat in ["ADVERSE", "AME", "CRIME", "CRIMINAL", "TERROR", "FRAUD", "MONEY LAUNDERING"]):
                     screening_result["adverse_media_hits"] += 1
                     record["source_type"] = "ADVERSE_MEDIA"
-                elif any(cat in category_str for cat in ["SPECIAL INTEREST", "LAW ENFORCEMENT", "REGULATORY", "OTHER BODIES", "WATCHLIST"]):
+                elif any(cat in all_categories for cat in ["SPECIAL INTEREST", "LAW ENFORCEMENT", "REGULATORY", "OTHER BODIES", "WATCHLIST", "ENFORCEMENT"]):
                     screening_result["special_interest_hits"] += 1
                     record["source_type"] = "SPECIAL_INTEREST"
                 else:
-                    # Check positions for additional categorization
-                    for pos in positions:
-                        pos_upper = pos.upper()
-                        if "PEP" in pos_upper or "POLITICAL" in pos_upper:
-                            screening_result["pep_hits"] += 1
-                            record["source_type"] = "PEP"
-                            break
-                        elif "SANCTION" in pos_upper:
-                            screening_result["sanctions_hits"] += 1
-                            record["source_type"] = "SANCTION"
-                            break
-                    else:
-                        # If still uncategorized, mark as special interest
-                        if record["source_type"] == "UNKNOWN":
-                            screening_result["special_interest_hits"] += 1
-                            record["source_type"] = "SPECIAL_INTEREST"
+                    # Default to special interest if there's a match but uncategorized
+                    screening_result["special_interest_hits"] += 1
+                    record["source_type"] = "SPECIAL_INTEREST"
+    
                 
                 screening_result["records"].append(record)
             
