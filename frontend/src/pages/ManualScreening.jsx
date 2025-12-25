@@ -581,6 +581,24 @@ const ManualScreening = () => {
                 Screening Checks Performed
               </h4>
               
+              {result.positive_findings.dilisense_matches?.fallback_used && (
+                <div style={{
+                  background: '#fef3c7',
+                  border: '1px solid #f59e0b',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px'
+                }}>
+                  <AlertTriangle size={18} color="#f59e0b" />
+                  <span style={{ color: '#92400e', fontSize: '14px' }}>
+                    <strong>Fallback Provider Used:</strong> {result.positive_findings.dilisense_matches.requested_provider === 'dilisense' ? 'Dilisense' : 'World Check One'} was unavailable. 
+                    Results are from {result.positive_findings.dilisense_matches.actual_provider === 'worldcheck' ? 'World Check One' : 'Dilisense'}.
+                  </span>
+                </div>
+              )}
               <div className="checks-grid">
                 {result.positive_findings.checks_performed?.map((check, idx) => (
                   <div key={idx} className={`check-item ${check.status === 'clear' ? 'clear' : 'alert'}`}>

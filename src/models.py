@@ -113,8 +113,13 @@ class DilisenseResult(BaseModel):
     sanctions_hits: int = 0
     pep_hits: int = 0
     criminal_hits: int = 0
+    adverse_media_hits: int = 0
+    special_interest_hits: int = 0
     records: List[DilisenseMatch] = Field(default_factory=list)
     risk_level: str = "LOW"
+    fallback_used: bool = False
+    requested_provider: Optional[str] = None
+    actual_provider: Optional[str] = None
 
 class SanctionsMatch(BaseModel):
     """Individual sanctions match record"""

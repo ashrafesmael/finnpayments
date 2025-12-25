@@ -41,6 +41,7 @@ class ScreeningEngine:
         self.ofac_api_key = ofac_api_key
         self.refinitiv_api_key = refinitiv_api_key
         self.dilisense_api_key = dilisense_api_key or os.getenv("DILISENSE_API_KEY")
+        logger.info(f"🔑 Dilisense API key configured: {bool(self.dilisense_api_key)}")
         
         # World-Check One API credentials
         self.worldcheck_api_key = worldcheck_api_key or os.getenv("WORLDCHECK_API_KEY")
@@ -107,7 +108,7 @@ class ScreeningEngine:
             RiskScore object with comprehensive assessment
         """
         start_time = time.time()
-        logger.info(f"🔍 Screening {entity_type}: {name} using provider: {screening_provider}")
+        logger.info(f"🔍 Screening {entity_type}: {name} using provider: {screening_provider} (type: {type(screening_provider).__name__})")
         
         # Get nationality from additional_context
         nationality = additional_context.get("nationality", "") if additional_context else ""
@@ -124,7 +125,10 @@ class ScreeningEngine:
             logger.info(f"📋 Using World Check One Screening")
         
         # Fallback to other provider if primary fails
+        fallback_used = False
+        original_provider = provider_name
         if aml_result is None:
+            fallback_used = True
             if provider_name == "worldcheck":
                 logger.warning(f"⚠️ World-Check unavailable, falling back to Dilisense")
                 aml_result = self._check_dilisense(name)
@@ -301,10 +305,15 @@ class ScreeningEngine:
             "jurisdiction_clear": risks["jurisdiction"] < 10,
             "jurisdiction_clear": jurisdiction_clear,
             "dilisense_clear": dilisense_result is None or dilisense_result.get("total_hits", 0) == 0,
-            "dilisense_matches": dilisense_result if dilisense_result else {"total_hits": 0, "sanctions_hits": 0, "pep_hits": 0, "criminal_hits": 0, "adverse_media_hits": 0, "special_interest_hits": 0, "records": []},
+            "dilisense_matches": {
+                **(dilisense_result if dilisense_result else {"total_hits": 0, "sanctions_hits": 0, "pep_hits": 0, "criminal_hits": 0, "adverse_media_hits": 0, "special_interest_hits": 0, "records": []}),
+                "fallback_used": fallback_used,
+                "requested_provider": original_provider,
+                "actual_provider": provider_name
+            },
             "fatf_check": fatf_result,
             "checks_performed": [
-                {"source": dilisense_result.get("provider", "Dilisense Screening") if dilisense_result else "Dilisense Screening", "status": "clear" if (dilisense_result is None or dilisense_result.get("total_hits", 0) == 0) else "hits_found", "details": f"{dilisense_result.get('total_hits', 0) if dilisense_result else 0} matches"},
+                {"source": dilisense_result.get("provider", "Dilisense Screening") if dilisense_result else "Dilisense Screening", "status": "clear" if (dilisense_result is None or dilisense_result.get("total_hits", 0) == 0) else "hits_found", "details": f"{dilisense_result.get('total_hits', 0) if dilisense_result else 0} matches" + (" (fallback)" if fallback_used else "")},
                 {"source": "Global Sanctions Lists", "status": "clear" if risks["sanctions"] < 10 else "potential_match", "details": "No sanctions matches" if risks["sanctions"] < 10 else "Review required"},
                 {"source": "PEP Database", "status": "clear" if risks["pep"] < 10 else "potential_match", "details": "Not a PEP" if risks["pep"] < 10 else "PEP status detected"},
                 {"source": "FATF Jurisdiction Check (Live)", "status": "clear" if jurisdiction_clear else "high_risk", "details": "Low-risk jurisdiction" if jurisdiction_clear else f"{fatf_result['country']} - {fatf_result['reason']}"},
