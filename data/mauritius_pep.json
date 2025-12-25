@@ -1,0 +1,11 @@
+{
+  "description": "Mauritius Politically Exposed Persons Database",
+  "last_updated": "2025-11-25",
+  "peps": [
+    {"name": "JYOTI JEETUN", "position": "Government Official", "risk_score": 70},
+    {"name": "PRAVIND JUGNAUTH", "position": "Prime Minister", "risk_score": 85},
+    {"name": "PRITHVIRAJSING ROOPUN", "position": "President", "risk_score": 85},
+    {"name": "RENGANADEN PADAYACHY", "position": "Minister of Finance", "risk_score": 80}
+  ],
+  "notes": "Add more PEPs as needed"
+}

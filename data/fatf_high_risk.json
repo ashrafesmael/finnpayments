@@ -1,0 +1,36 @@
+{
+  "description": "FATF High-Risk and Other Monitored Jurisdictions",
+  "last_updated": "2025-01-01",
+  "source": "FATF Public Statement",
+  "high_risk_jurisdictions": {
+    "call_for_action": [
+      {"country": "Democratic People's Republic of Korea", "codes": ["KP", "PRK", "NORTH KOREA"], "risk_level": "highest", "reason": "FATF Call for Action - significant deficiencies in AML/CFT"},
+      {"country": "Iran", "codes": ["IR", "IRN", "IRAN"], "risk_level": "highest", "reason": "FATF Call for Action - significant deficiencies in AML/CFT"},
+      {"country": "Myanmar", "codes": ["MM", "MMR", "BURMA"], "risk_level": "highest", "reason": "FATF Call for Action - significant deficiencies in AML/CFT"}
+    ],
+    "increased_monitoring": [
+      {"country": "Bulgaria", "codes": ["BG", "BGR"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Burkina Faso", "codes": ["BF", "BFA"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Cameroon", "codes": ["CM", "CMR"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Croatia", "codes": ["HR", "HRV"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Democratic Republic of the Congo", "codes": ["CD", "COD", "DRC"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Haiti", "codes": ["HT", "HTI"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Kenya", "codes": ["KE", "KEN"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Mali", "codes": ["ML", "MLI"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Monaco", "codes": ["MC", "MCO"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Mozambique", "codes": ["MZ", "MOZ"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Namibia", "codes": ["NA", "NAM"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Nigeria", "codes": ["NG", "NGA"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Philippines", "codes": ["PH", "PHL"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Senegal", "codes": ["SN", "SEN"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "South Africa", "codes": ["ZA", "ZAF"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "South Sudan", "codes": ["SS", "SSD"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Syria", "codes": ["SY", "SYR"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Tanzania", "codes": ["TZ", "TZA"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Venezuela", "codes": ["VE", "VEN"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Vietnam", "codes": ["VN", "VNM"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"},
+      {"country": "Yemen", "codes": ["YE", "YEM"], "risk_level": "high", "reason": "FATF Grey List - under increased monitoring"}
+    ]
+  },
+  "notes": "This list is updated periodically. Check FATF website for latest updates: https://www.fatf-gafi.org/en/topics/high-risk-and-other-monitored-jurisdictions.html"
+}

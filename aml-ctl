@@ -1,0 +1,8 @@
+#!/bin/bash
+case "$1" in
+  start)   sudo systemctl start instascreen-backend instascreen-frontend ;;
+  stop)    sudo systemctl stop instascreen-backend instascreen-frontend ;;
+  restart) sudo systemctl restart instascreen-backend instascreen-frontend ;;
+  status)  sudo systemctl status instascreen-backend instascreen-frontend ;;
+  *)       echo "Usage: $0 {start|stop|restart|status}" ;;
+esac
