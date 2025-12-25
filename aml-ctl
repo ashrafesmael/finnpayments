@@ -1,8 +1,8 @@
 #!/bin/bash
 case "$1" in
-  start)   sudo systemctl start instascreen-backend instascreen-frontend ;;
-  stop)    sudo systemctl stop instascreen-backend instascreen-frontend ;;
-  restart) sudo systemctl restart instascreen-backend instascreen-frontend ;;
-  status)  sudo systemctl status instascreen-backend instascreen-frontend ;;
+  start)   sudo systemctl start finnverify-backend finnverify-frontend ;;
+  stop)    sudo systemctl stop finnverify-backend finnverify-frontend ;;
+  restart) sudo systemctl restart finnverify-backend finnverify-frontend ;;
+  status)  sudo systemctl status finnverify-backend finnverify-frontend ;;
   *)       echo "Usage: $0 {start|stop|restart|status}" ;;
 esac
