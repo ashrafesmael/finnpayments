@@ -41,7 +41,6 @@ class ScreeningEngine:
         self.ofac_api_key = ofac_api_key
         self.refinitiv_api_key = refinitiv_api_key
         self.dilisense_api_key = dilisense_api_key or os.getenv("DILISENSE_API_KEY")
-        logger.info(f"🔑 Dilisense API key configured: {bool(self.dilisense_api_key)}")
         
         # World-Check One API credentials
         self.worldcheck_api_key = worldcheck_api_key or os.getenv("WORLDCHECK_API_KEY")
@@ -108,7 +107,7 @@ class ScreeningEngine:
             RiskScore object with comprehensive assessment
         """
         start_time = time.time()
-        logger.info(f"🔍 Screening {entity_type}: {name} using provider: {screening_provider} (type: {type(screening_provider).__name__})")
+        logger.info(f"🔍 Screening {entity_type}: {name} using provider: {screening_provider}")
         
         # Get nationality from additional_context
         nationality = additional_context.get("nationality", "") if additional_context else ""
@@ -125,10 +124,7 @@ class ScreeningEngine:
             logger.info(f"📋 Using World Check One Screening")
         
         # Fallback to other provider if primary fails
-        fallback_used = False
-        original_provider = provider_name
         if aml_result is None:
-            fallback_used = True
             if provider_name == "worldcheck":
                 logger.warning(f"⚠️ World-Check unavailable, falling back to Dilisense")
                 aml_result = self._check_dilisense(name)
@@ -305,15 +301,10 @@ class ScreeningEngine:
             "jurisdiction_clear": risks["jurisdiction"] < 10,
             "jurisdiction_clear": jurisdiction_clear,
             "dilisense_clear": dilisense_result is None or dilisense_result.get("total_hits", 0) == 0,
-            "dilisense_matches": {
-                **(dilisense_result if dilisense_result else {"total_hits": 0, "sanctions_hits": 0, "pep_hits": 0, "criminal_hits": 0, "adverse_media_hits": 0, "special_interest_hits": 0, "records": []}),
-                "fallback_used": fallback_used,
-                "requested_provider": original_provider,
-                "actual_provider": provider_name
-            },
+            "dilisense_matches": dilisense_result if dilisense_result else {"total_hits": 0, "sanctions_hits": 0, "pep_hits": 0, "criminal_hits": 0, "adverse_media_hits": 0, "special_interest_hits": 0, "records": []},
             "fatf_check": fatf_result,
             "checks_performed": [
-                {"source": dilisense_result.get("provider", "Dilisense Screening") if dilisense_result else "Dilisense Screening", "status": "clear" if (dilisense_result is None or dilisense_result.get("total_hits", 0) == 0) else "hits_found", "details": f"{dilisense_result.get('total_hits', 0) if dilisense_result else 0} matches" + (" (fallback)" if fallback_used else "")},
+                {"source": dilisense_result.get("provider", "Dilisense Screening") if dilisense_result else "Dilisense Screening", "status": "clear" if (dilisense_result is None or dilisense_result.get("total_hits", 0) == 0) else "hits_found", "details": f"{dilisense_result.get('total_hits', 0) if dilisense_result else 0} matches"},
                 {"source": "Global Sanctions Lists", "status": "clear" if risks["sanctions"] < 10 else "potential_match", "details": "No sanctions matches" if risks["sanctions"] < 10 else "Review required"},
                 {"source": "PEP Database", "status": "clear" if risks["pep"] < 10 else "potential_match", "details": "Not a PEP" if risks["pep"] < 10 else "PEP status detected"},
                 {"source": "FATF Jurisdiction Check (Live)", "status": "clear" if jurisdiction_clear else "high_risk", "details": "Low-risk jurisdiction" if jurisdiction_clear else f"{fatf_result['country']} - {fatf_result['reason']}"},
@@ -387,31 +378,30 @@ class ScreeningEngine:
             import httpx
             import os
             
-            serpapi_key = os.getenv("SERPAPI_KEY")
-            if not serpapi_key:
-                logger.warning("⚠️ SERPAPI_KEY not set, cannot fetch live FATF data")
+            serper_key = os.getenv("SERPER_API_KEY")
+            if not serper_key:
+                logger.warning("⚠️ SERPER_API_KEY not set, cannot fetch live FATF data")
                 return None
             
-            # Search for current FATF grey list
-            response = httpx.get(
-                "https://serpapi.com/search",
-                params={
+            # Search for current FATF grey list using Serper.dev
+            response = httpx.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                json={
                     "q": "FATF grey list increased monitoring countries list 2025 site:fatf-gafi.org OR site:complyadvantage.com",
-                    "api_key": serpapi_key,
-                    "num": 10,
-                    "engine": "google"
+                    "num": 10
                 },
                 timeout=15.0
             )
             
             if response.status_code != 200:
-                logger.warning(f"⚠️ SerpAPI returned {response.status_code}")
+                logger.warning(f"⚠️ Serper.dev returned {response.status_code}")
                 return None
             
             search_results = response.json()
             snippets = []
             
-            for result in search_results.get("organic_results", [])[:5]:
+            for result in search_results.get("organic", [])[:5]:
                 snippet = result.get("snippet", "")
                 title = result.get("title", "")
                 snippets.append(f"{title}: {snippet}")
@@ -672,8 +662,8 @@ Be conservative - only include countries you are confident are CURRENTLY on the 
                 search_queries = [f'"{name}" sanctions OR corruption OR fraud']
             
             # Try SerpAPI if available
-            serpapi_key = os.getenv("SERPAPI_KEY")
-            if serpapi_key:
+            serper_key = os.getenv("SERPER_API_KEY")
+            if serper_key:
                 seen_links = set()
                 try:
                     # Search with multiple queries
@@ -681,12 +671,12 @@ Be conservative - only include countries you are confident are CURRENTLY on the 
                         logger.debug(f"Adverse media search: {query}")
                         response = httpx.get(
                             "https://serpapi.com/search",
-                            params={"q": query, "api_key": serpapi_key, "num": 10, "engine": "google"},
+                            params={"q": query, "api_key": serper_key, "num": 10, "engine": "google"},
                             timeout=15.0
                         )
                         if response.status_code == 200:
                             data = response.json()
-                            organic = data.get("organic_results", [])
+                            organic = data.get("organic", [])
                             
                             # Check results with any name variant
                             name_variants_lower = [name.lower()]
@@ -729,7 +719,7 @@ Be conservative - only include countries you are confident are CURRENTLY on the 
                                         "source": item.get("source", "Google")
                                     })
                 except Exception as e:
-                    logger.debug(f"SerpAPI search failed: {e}")
+                    logger.debug(f"Serper.dev search failed: {e}")
             
             # Fallback: Use Groq LLM to provide adverse media context
             if results["total_mentions"] == 0:
