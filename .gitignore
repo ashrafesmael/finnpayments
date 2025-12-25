@@ -88,3 +88,4 @@ frontend/.env.production
 
 # Temp files
 temp_uploads/
+data/*.json
