@@ -455,7 +455,7 @@ const DocumentUpload = () => {
               {/* World-Check One Matches Section - Only show if World-Check was used */}
               {result.risk_assessment.positive_findings?.dilisense_matches && 
                result.risk_assessment.positive_findings.dilisense_matches.total_hits > 0 && 
-               result.risk_assessment.positive_findings.dilisense_matches.provider?.includes('World-Check') && (
+               result.risk_assessment.positive_findings.dilisense_matches.provider?.includes('World Check') && (
                 <div className="worldcheck-matches-section">
                   <h5>
                     <AlertTriangle size={18} />

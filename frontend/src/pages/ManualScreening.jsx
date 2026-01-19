@@ -685,7 +685,7 @@ const ManualScreening = () => {
           {/* World-Check One Matches Section - Only show if World-Check was used */}
           {result.positive_findings?.dilisense_matches && 
            result.positive_findings.dilisense_matches.total_hits > 0 && 
-           result.positive_findings.dilisense_matches.provider?.includes('World-Check') && (
+           result.positive_findings.dilisense_matches.provider?.includes('World Check') && (
             <div className="worldcheck-matches-section">
               <h4>
                 <AlertTriangle size={18} />
