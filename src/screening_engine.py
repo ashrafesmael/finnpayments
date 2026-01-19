@@ -214,7 +214,7 @@ class ScreeningEngine:
                         " ".join(record.get("sources", []))
                     ]).upper()
                     if any(keyword in record_text for keyword in financial_crime_keywords):
-                        sanctions_risk = max(sanctions_risk, 70)  # Treat financial crimes seriously
+                        adverse_media_risk = max(adverse_media_risk, 70)  # Financial crimes affect adverse media risk
                         logger.warning(f"🚨 FINANCIAL CRIME indicators found for {name}: {record_text[:100]}")
                         break
         
@@ -242,8 +242,7 @@ class ScreeningEngine:
             name_mentioned = any(part in adverse_text for part in name_parts if len(part) > 2)
             
             if name_mentioned and any(keyword in adverse_text for keyword in financial_crime_keywords):
-                # Financial crime evidence in media = HIGH risk
-                sanctions_risk = max(sanctions_risk, 70)
+                # Financial crime evidence in media affects adverse media risk only
                 adverse_media_risk = max(adverse_media_risk, 100)
                 financial_crime_detected = True
                 logger.warning(f"🚨 FINANCIAL CRIME evidence in adverse media for {name}")
