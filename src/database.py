@@ -1,332 +1,254 @@
 """
-Database integration for AML Intelligence System
+FinnPayments - Database Layer
+SQLite database with SQLAlchemy ORM for invoice and accounting data.
 """
+
 import os
-import uuid
-from datetime import datetime
-from typing import Dict, List, Optional
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Text, Integer
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+import json
 import logging
+from datetime import datetime
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from contextlib import contextmanager
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("FinnPayments.Database")
 
-# Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./aml_system.db")
+DATABASE_URL = os.getenv("FINNPAYMENTS_DB_URL", "sqlite:///finnpayments.db")
 
-# Create engine
-if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-else:
-    engine = create_engine(DATABASE_URL)
-
+engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-class ComplianceCase(Base):
-    """Compliance cases table"""
-    __tablename__ = "compliance_cases"
+# ─── ORM Models ──────────────────────────────────────────
+
+class Invoice(Base):
+    __tablename__ = "invoices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_id = Column(String(50), unique=True, nullable=False, index=True)
+    invoice_type = Column(String(20), default="supplier")
+    status = Column(String(20), default="pending_review")
     
-    case_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    analysis_id = Column(String, unique=True, nullable=False)
-    entity_name = Column(String(255), nullable=False)
-    entity_type = Column(String(50), nullable=False)
-    risk_score = Column(Float, nullable=False)
-    risk_level = Column(String(20), nullable=False)
-    status = Column(String(50), default='pending_review')
+    # Vendor/Client Info
+    vendor_name = Column(String(255), nullable=False)
+    vendor_address = Column(Text)
+    vendor_brn = Column(String(50))
+    vendor_vat = Column(String(50))
+    
+    # Invoice Details
+    invoice_number = Column(String(100), index=True)
+    invoice_date = Column(String(20))
+    due_date = Column(String(20))
+    purchase_order = Column(String(100))
+    currency = Column(String(10), default="MUR")
+    
+    # Amounts
+    subtotal = Column(Float, default=0.0)
+    tax_total = Column(Float, default=0.0)
+    total_amount = Column(Float, default=0.0)
+    
+    # Metadata
+    payment_terms = Column(Text)
+    bank_details = Column(Text)
+    notes = Column(Text)
+    project_code = Column(String(50))
+    cost_center = Column(String(50))
+    
+    # AI Processing
+    confidence_score = Column(Float, default=0.0)
+    raw_text = Column(Text)
+    ai_analysis = Column(Text)  # JSON string
+    source_file = Column(String(500))
+    
+    # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    assigned_to = Column(String(255))
-    notes = Column(Text)
-
-
-class DocumentExtraction(Base):
-    """Document extraction results"""
-    __tablename__ = "document_extractions"
     
-    extraction_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    case_id = Column(String, nullable=False)
-    document_type = Column(String(50), nullable=False)
-    extracted_data = Column(Text, nullable=False)  # JSON as text for SQLite compatibility
-    confidence_scores = Column(Text, nullable=False)  # JSON as text
-    extraction_time_ms = Column(Integer)
+    # Relationships
+    line_items = relationship("InvoiceLineItemDB", back_populates="invoice", cascade="all, delete-orphan")
+    journal_entries = relationship("JournalEntryDB", back_populates="invoice", cascade="all, delete-orphan")
+
+
+class InvoiceLineItemDB(Base):
+    __tablename__ = "invoice_line_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_id = Column(String(50), ForeignKey("invoices.invoice_id"), nullable=False)
+    line_number = Column(Integer)
+    description = Column(Text)
+    quantity = Column(Float, default=1.0)
+    unit_price = Column(Float, default=0.0)
+    amount = Column(Float, default=0.0)
+    tax_rate = Column(Float, default=15.0)
+    tax_amount = Column(Float, default=0.0)
+    account_code = Column(String(20))
+    cost_center = Column(String(50))
+    project_code = Column(String(50))
+    
+    invoice = relationship("Invoice", back_populates="line_items")
+
+
+class JournalEntryDB(Base):
+    __tablename__ = "journal_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entry_id = Column(String(50), unique=True, nullable=False, index=True)
+    invoice_id = Column(String(50), ForeignKey("invoices.invoice_id"))
+    entry_date = Column(String(20))
+    reference = Column(String(100))
+    description = Column(Text)
+    total_debit = Column(Float, default=0.0)
+    total_credit = Column(Float, default=0.0)
+    is_balanced = Column(Boolean, default=True)
+    status = Column(String(20), default="draft")
+    created_by = Column(String(100), default="system")
     created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class ScreeningResult(Base):
-    """Screening results"""
-    __tablename__ = "screening_results"
     
-    screening_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    case_id = Column(String, nullable=False)
-    sanctions_risk = Column(Float)
-    pep_risk = Column(Float)
-    adverse_media_risk = Column(Float)
-    behavioral_risk = Column(Float)
-    flags = Column(Text, nullable=False)  # JSON as text
-    recommendations = Column(Text, nullable=False)  # JSON as text
+    invoice = relationship("Invoice", back_populates="journal_entries")
+    lines = relationship("JournalEntryLineDB", back_populates="journal_entry", cascade="all, delete-orphan")
+
+
+class JournalEntryLineDB(Base):
+    __tablename__ = "journal_entry_lines"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entry_id = Column(String(50), ForeignKey("journal_entries.entry_id"), nullable=False)
+    account_code = Column(String(20))
+    account_name = Column(String(255))
+    description = Column(Text)
+    debit = Column(Float, default=0.0)
+    credit = Column(Float, default=0.0)
+    cost_center = Column(String(50))
+    project_code = Column(String(50))
+    
+    journal_entry = relationship("JournalEntryDB", back_populates="lines")
+
+
+class ChartOfAccountsDB(Base):
+    __tablename__ = "chart_of_accounts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(20), unique=True, nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    category = Column(String(20))  # asset, liability, equity, revenue, expense
+    parent_code = Column(String(20))
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+
+
+# ─── Database Initialization ─────────────────────────────
+
+
+
+class ClassificationRule(Base):
+    __tablename__ = "classification_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    vendor_name = Column(String(255), index=True)
+    description_pattern = Column(String(500))
+    account_code = Column(String(20), nullable=False)
+    account_name = Column(String(255))
+    user_context = Column(Text)
+    source = Column(String(20), default="reclassify")  # reclassify, manual
+    times_used = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class SARFiling(Base):
-    """SAR filings"""
-    __tablename__ = "sar_filings"
-    
-    sar_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    case_id = Column(String, nullable=False)
-    filing_date = Column(DateTime, nullable=False)
-    filed_by = Column(String(255), nullable=False)
-    financial_institution = Column(String(255), nullable=False)
-    sar_document = Column(Text, nullable=False)
-    status = Column(String(50), default='drafted')
-    fincen_receipt_number = Column(String(50))
-    created_at = Column(DateTime, default=datetime.utcnow)
+def init_db():
+    """Create all tables and seed chart of accounts"""
+    Base.metadata.create_all(bind=engine)
+    logger.info("✅ Database tables created")
+    _seed_chart_of_accounts()
 
 
-class AuditLog(Base):
-    """Audit trail"""
-    __tablename__ = "audit_log"
-    
-    log_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    case_id = Column(String)
-    action = Column(String(255), nullable=False)
-    user_id = Column(String(255))
-    details = Column(Text)  # JSON as text
-    timestamp = Column(DateTime, default=datetime.utcnow)
-
-
-class DatabaseManager:
-    """Database operations manager"""
-    
-    def __init__(self):
-        self.engine = engine
-        self.SessionLocal = SessionLocal
+def _seed_chart_of_accounts():
+    """Seed default chart of accounts if empty"""
+    db = SessionLocal()
+    try:
+        if db.query(ChartOfAccountsDB).count() > 0:
+            return
         
-    def create_tables(self):
-        """Create all tables"""
-        try:
-            Base.metadata.create_all(bind=self.engine)
-            logger.info("✓ Database tables created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create tables: {e}")
-            raise
-    
-    def get_session(self) -> Session:
-        """Get database session"""
-        return self.SessionLocal()
-    
-    def save_compliance_case(self, analysis_data: Dict) -> str:
-        """Save compliance case to database"""
-        session = self.get_session()
-        try:
-            case = ComplianceCase(
-                analysis_id=analysis_data["analysis_id"],
-                entity_name=analysis_data["entity_name"],
-                entity_type=analysis_data["entity_type"],
-                risk_score=analysis_data["risk_score"],
-                risk_level=analysis_data["risk_level"]
-            )
-            session.add(case)
-            session.commit()
+        default_accounts = [
+            # Assets
+            ("1000", "Cash and Cash Equivalents", "asset", None),
+            ("1010", "Petty Cash", "asset", "1000"),
+            ("1100", "Accounts Receivable", "asset", None),
+            ("1200", "Prepaid Expenses", "asset", None),
+            ("1300", "Inventory", "asset", None),
+            ("1500", "Property, Plant & Equipment", "asset", None),
+            ("1510", "Land & Buildings", "asset", "1500"),
+            ("1520", "Furniture & Equipment", "asset", "1500"),
+            ("1530", "Motor Vehicles", "asset", "1500"),
+            ("1590", "Accumulated Depreciation", "asset", "1500"),
             
-            # Log the action
-            self.log_action(
-                case_id=case.case_id,
-                action="CASE_CREATED",
-                details={"analysis_id": analysis_data["analysis_id"]}
-            )
+            # Liabilities
+            ("2000", "Accounts Payable", "liability", None),
+            ("2100", "VAT Payable", "liability", None),
+            ("2110", "VAT Input (Receivable)", "liability", None),
+            ("2200", "Accrued Expenses", "liability", None),
+            ("2300", "Short-term Loans", "liability", None),
+            ("2500", "Long-term Loans", "liability", None),
             
-            logger.info(f"✓ Saved compliance case: {case.case_id}")
-            return case.case_id
+            # Equity
+            ("3000", "Share Capital", "equity", None),
+            ("3100", "Retained Earnings", "equity", None),
+            ("3200", "Current Year Earnings", "equity", None),
             
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to save compliance case: {e}")
-            raise
-        finally:
-            session.close()
-    
-    def save_screening_result(self, case_id: str, screening_data: Dict):
-        """Save screening results to database"""
-        session = self.get_session()
-        try:
-            import json
+            # Revenue
+            ("4000", "Sales Revenue", "revenue", None),
+            ("4010", "Property Sales", "revenue", "4000"),
+            ("4020", "Rental Income", "revenue", "4000"),
+            ("4030", "Management Fees", "revenue", "4000"),
+            ("4040", "Golf & Leisure Revenue", "revenue", "4000"),
+            ("4100", "Other Income", "revenue", None),
+            ("4110", "Interest Income", "revenue", "4100"),
             
-            result = ScreeningResult(
-                case_id=case_id,
-                sanctions_risk=screening_data.get("sanctions_risk", 0),
-                pep_risk=screening_data.get("pep_risk", 0),
-                adverse_media_risk=screening_data.get("adverse_media_risk", 0),
-                behavioral_risk=screening_data.get("behavioral_risk", 0),
-                flags=json.dumps(screening_data.get("flags", [])),
-                recommendations=json.dumps(screening_data.get("recommendations", []))
-            )
-            session.add(result)
-            session.commit()
-            
-            logger.info(f"✓ Saved screening result for case: {case_id}")
-            
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to save screening result: {e}")
-            raise
-        finally:
-            session.close()
-    
-    def save_document_extraction(self, case_id: str, extraction_data: Dict):
-        """Save document extraction results"""
-        session = self.get_session()
-        try:
-            import json
-            
-            extraction = DocumentExtraction(
-                case_id=case_id,
-                document_type=extraction_data["document_type"],
-                extracted_data=json.dumps(extraction_data["extracted_data"]),
-                confidence_scores=json.dumps(extraction_data.get("confidence_scores", {})),
-                extraction_time_ms=extraction_data.get("processing_time_ms", 0)
-            )
-            session.add(extraction)
-            session.commit()
-            
-            logger.info(f"✓ Saved document extraction for case: {case_id}")
-            
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to save document extraction: {e}")
-            raise
-        finally:
-            session.close()
-    
-    def get_compliance_cases(self, limit: int = 50, risk_level: str = None) -> List[Dict]:
-        """Get compliance cases with optional filtering"""
-        session = self.get_session()
-        try:
-            query = session.query(ComplianceCase)
-            
-            if risk_level:
-                query = query.filter(ComplianceCase.risk_level == risk_level)
-            
-            cases = query.order_by(ComplianceCase.created_at.desc()).limit(limit).all()
-            
-            return [
-                {
-                    "case_id": case.case_id,
-                    "analysis_id": case.analysis_id,
-                    "entity_name": case.entity_name,
-                    "entity_type": case.entity_type,
-                    "risk_score": case.risk_score,
-                    "risk_level": case.risk_level,
-                    "status": case.status,
-                    "created_at": case.created_at.isoformat(),
-                    "assigned_to": case.assigned_to,
-                    "notes": case.notes
-                }
-                for case in cases
-            ]
-            
-        except Exception as e:
-            logger.error(f"Failed to get compliance cases: {e}")
-            return []
-        finally:
-            session.close()
-    
-    def get_dashboard_stats(self) -> Dict:
-        """Get dashboard statistics from database"""
-        session = self.get_session()
-        try:
-            total_cases = session.query(ComplianceCase).count()
-            high_risk = session.query(ComplianceCase).filter(
-                ComplianceCase.risk_level == "HIGH"
-            ).count()
-            critical_risk = session.query(ComplianceCase).filter(
-                ComplianceCase.risk_level == "CRITICAL"
-            ).count()
-            
-            # Calculate average risk score
-            avg_risk = session.query(ComplianceCase.risk_score).all()
-            avg_risk_score = sum(r[0] for r in avg_risk) / len(avg_risk) if avg_risk else 0
-            
-            return {
-                "total_analyses": total_cases,
-                "high_risk_count": high_risk,
-                "critical_count": critical_risk,
-                "average_risk_score": avg_risk_score
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get dashboard stats: {e}")
-            return {
-                "total_analyses": 0,
-                "high_risk_count": 0,
-                "critical_count": 0,
-                "average_risk_score": 0.0
-            }
-        finally:
-            session.close()
-    
-    def log_action(self, case_id: str = None, action: str = "", user_id: str = None, details: Dict = None):
-        """Log an action to audit trail"""
-        session = self.get_session()
-        try:
-            import json
-            
-            log_entry = AuditLog(
-                case_id=case_id,
-                action=action,
-                user_id=user_id,
-                details=json.dumps(details or {})
-            )
-            session.add(log_entry)
-            session.commit()
-            
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to log action: {e}")
-        finally:
-            session.close()
-    
-    def create_sar_filing(self, case_id: str, sar_data: Dict) -> str:
-        """Create SAR filing record"""
-        session = self.get_session()
-        try:
-            sar = SARFiling(
-                case_id=case_id,
-                filing_date=datetime.utcnow(),
-                filed_by=sar_data.get("filed_by", "AML System"),
-                financial_institution=sar_data.get("institution", "Demo Bank"),
-                sar_document=sar_data["sar_filing"]
-            )
-            session.add(sar)
-            session.commit()
-            
-            # Log the SAR filing
-            self.log_action(
-                case_id=case_id,
-                action="SAR_FILED",
-                details={"sar_id": sar.sar_id}
-            )
-            
-            logger.info(f"✓ Created SAR filing: {sar.sar_id}")
-            return sar.sar_id
-            
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to create SAR filing: {e}")
-            raise
-        finally:
-            session.close()
+            # Expenses
+            ("5000", "Cost of Sales", "expense", None),
+            ("5100", "Construction Costs", "expense", "5000"),
+            ("5200", "Land Costs", "expense", "5000"),
+            ("6000", "Operating Expenses", "expense", None),
+            ("6010", "Salaries & Wages", "expense", "6000"),
+            ("6020", "Employee Benefits", "expense", "6000"),
+            ("6030", "Rent & Utilities", "expense", "6000"),
+            ("6040", "Insurance", "expense", "6000"),
+            ("6050", "Professional Fees", "expense", "6000"),
+            ("6060", "Marketing & Advertising", "expense", "6000"),
+            ("6070", "Office Supplies", "expense", "6000"),
+            ("6080", "Travel & Entertainment", "expense", "6000"),
+            ("6090", "Repairs & Maintenance", "expense", "6000"),
+            ("6100", "Depreciation", "expense", "6000"),
+            ("6110", "IT & Software", "expense", "6000"),
+            ("6120", "Security", "expense", "6000"),
+            ("6130", "Landscaping & Grounds", "expense", "6000"),
+            ("7000", "Finance Costs", "expense", None),
+            ("7010", "Bank Charges", "expense", "7000"),
+            ("7020", "Interest Expense", "expense", "7000"),
+            ("7030", "Foreign Exchange Loss", "expense", "7000"),
+        ]
+        
+        for code, name, category, parent in default_accounts:
+            db.add(ChartOfAccountsDB(
+                code=code, name=name, category=category, parent_code=parent
+            ))
+        
+        db.commit()
+        logger.info(f"✅ Seeded {len(default_accounts)} chart of accounts entries")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error seeding accounts: {e}")
+    finally:
+        db.close()
 
 
-# Global database manager instance
-db_manager = DatabaseManager()
-
-# Initialize database on import
-try:
-    db_manager.create_tables()
-except Exception as e:
-    logger.warning(f"Database initialization failed: {e}")
-    logger.info("Using in-memory storage for demo")
+@contextmanager
+def get_db():
+    """Database session context manager"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

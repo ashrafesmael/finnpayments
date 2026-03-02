@@ -1,221 +1,204 @@
 """
-Data models for AML Intelligence System
+FinnPayments - Data Models
+Pydantic models for invoice processing and accounting entries.
+Mirrors FinnVerify's model architecture.
 """
+
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+from typing import Optional, List, Dict, Any
 from enum import Enum
+from datetime import date, datetime
 
 
-class RiskLevel(str, Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
+# ─── Enums ────────────────────────────────────────────────
+
+class InvoiceStatus(str, Enum):
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    POSTED = "posted"
+    PAID = "paid"
+    CANCELLED = "cancelled"
 
 
-class DocumentType(str, Enum):
-    SAR = "SAR"
-    TRANSACTION = "TRANSACTION"
-    KYC = "KYC"
+class InvoiceType(str, Enum):
+    SUPPLIER = "supplier"        # Accounts Payable
+    CLIENT = "client"            # Accounts Receivable
+    CREDIT_NOTE = "credit_note"
+    DEBIT_NOTE = "debit_note"
+    PROFORMA = "proforma"
 
 
-class SuspiciousActivityReport(BaseModel):
-    """Suspicious Activity Report data model"""
-    report_id: str
-    filing_date: str
-    filing_institution: str
-    subject_name: str
-    subject_account: str
-    transaction_amount: float
-    transaction_date: str
-    suspicious_activity_type: str
-    narrative: str
-    confidence_scores: Dict[str, float] = Field(default_factory=dict)
+class EntryType(str, Enum):
+    DEBIT = "debit"
+    CREDIT = "credit"
 
 
-class TransactionRecord(BaseModel):
-    """Transaction record data model"""
-    transaction_id: str
-    transaction_date: str
-    originator_name: str
-    originator_account: str
-    beneficiary_name: str
-    beneficiary_account: str
+class AccountCategory(str, Enum):
+    ASSET = "asset"
+    LIABILITY = "liability"
+    EQUITY = "equity"
+    REVENUE = "revenue"
+    EXPENSE = "expense"
+
+
+class Currency(str, Enum):
+    MUR = "MUR"
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+    ZAR = "ZAR"
+
+
+# ─── Chart of Accounts ───────────────────────────────────
+
+class AccountCode(BaseModel):
+    """Chart of Accounts entry"""
+    code: str = Field(..., description="Account code (e.g., 2100, 4010)")
+    name: str = Field(..., description="Account name")
+    category: AccountCategory
+    parent_code: Optional[str] = None
+    description: Optional[str] = None
+    is_active: bool = True
+
+
+# ─── Line Items ───────────────────────────────────────────
+
+class InvoiceLineItem(BaseModel):
+    """Individual line item on an invoice"""
+    line_number: int
+    description: str
+    quantity: float = 1.0
+    unit_price: float
     amount: float
-    currency: str = "USD"
-    purpose: str
-    confidence_scores: Dict[str, float] = Field(default_factory=dict)
+    tax_rate: float = 15.0  # Mauritius VAT default
+    tax_amount: float = 0.0
+    account_code: Optional[str] = None  # GL account to post to
+    cost_center: Optional[str] = None
+    project_code: Optional[str] = None
 
 
-class KYCDocument(BaseModel):
-    """KYC document data model"""
-    customer_id: str
-    full_name: str
-    date_of_birth: str
-    nationality: str
-    document_type: str
-    document_number: str
-    issue_date: str
-    expiry_date: str
-    address: str
-    politically_exposed_person: bool = False
-    confidence_scores: Dict[str, float] = Field(default_factory=dict)
+# ─── Invoice Models ───────────────────────────────────────
+
+class InvoiceExtracted(BaseModel):
+    """Data extracted from uploaded invoice document"""
+    vendor_name: Optional[str] = None
+    vendor_address: Optional[str] = None
+    vendor_brn: Optional[str] = None       # Business Registration Number
+    vendor_vat: Optional[str] = None       # VAT Registration Number
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    due_date: Optional[str] = None
+    purchase_order: Optional[str] = None
+    currency: str = "MUR"
+    subtotal: Optional[float] = None
+    tax_total: Optional[float] = None
+    total_amount: Optional[float] = None
+    line_items: List[InvoiceLineItem] = []
+    payment_terms: Optional[str] = None
+    bank_details: Optional[str] = None
+    notes: Optional[str] = None
+    confidence_score: float = 0.0
+    raw_text: Optional[str] = None
 
 
-class AdverseMediaArticle(BaseModel):
-    """Adverse media article finding"""
-    title: str = ""
-    snippet: Optional[str] = None
-    link: str = ""
-    source: str = ""
+class InvoiceCreateRequest(BaseModel):
+    """Request to create an invoice manually"""
+    invoice_type: InvoiceType = InvoiceType.SUPPLIER
+    vendor_name: str
+    vendor_brn: Optional[str] = None
+    invoice_number: str
+    invoice_date: str
+    due_date: Optional[str] = None
+    currency: Currency = Currency.MUR
+    line_items: List[InvoiceLineItem]
+    notes: Optional[str] = None
+    project_code: Optional[str] = None
+    cost_center: Optional[str] = None
 
 
-class AdverseMediaFindings(BaseModel):
-    """Adverse media search results"""
-    total_mentions: int = 0
-    risk_keywords_found: List[str] = Field(default_factory=list)
-    articles: List[AdverseMediaArticle] = Field(default_factory=list)
-    risk_score: float = 0
+class InvoiceResponse(BaseModel):
+    """Response after invoice processing"""
+    invoice_id: str
+    status: InvoiceStatus
+    invoice_type: InvoiceType
+    vendor_name: str
+    invoice_number: str
+    invoice_date: str
+    due_date: Optional[str] = None
+    currency: str = "MUR"
+    subtotal: float
+    tax_total: float
+    total_amount: float
+    line_items: List[InvoiceLineItem]
+    accounting_entries: List[Dict[str, Any]] = []
+    ai_suggestions: Optional[Dict[str, Any]] = None
+    confidence_score: float = 0.0
+    created_at: str
+    updated_at: str
 
 
-class ScreeningCheck(BaseModel):
-    """Individual screening check result"""
-    source: str
-    status: str  # "clear", "hits_found", "potential_match", "mentions_found", "patterns_detected"
-    details: str
+# ─── Accounting Entry Models ─────────────────────────────
+
+class JournalEntryLine(BaseModel):
+    """Single line in a journal entry"""
+    account_code: str
+    account_name: str
+    description: str
+    debit: float = 0.0
+    credit: float = 0.0
+    cost_center: Optional[str] = None
+    project_code: Optional[str] = None
 
 
-class FATFCheck(BaseModel):
-    """FATF jurisdiction check result"""
-    is_high_risk: bool = False
-    risk_level: str = "normal"
-    country: str = ""
-    reason: Optional[str] = None
-    risk_score: float = 0
+class JournalEntry(BaseModel):
+    """Complete journal entry (double-entry bookkeeping)"""
+    entry_id: str
+    invoice_id: Optional[str] = None
+    entry_date: str
+    reference: str
+    description: str
+    lines: List[JournalEntryLine]
+    total_debit: float
+    total_credit: float
+    is_balanced: bool = True
+    status: str = "draft"  # draft, posted, reversed
+    created_by: str = "system"
+    created_at: str
 
 
-class DilisenseMatch(BaseModel):
-    """Individual Dilisense match record"""
-    name: Optional[str] = None
-    source_type: Optional[str] = None
-    entity_type: Optional[str] = None
-    positions: List[str] = Field(default_factory=list)
-    sanction_details: Optional[str] = None
-    match_type: Optional[str] = None  # EXACT, PARTIAL, or FUZZY
-    match_score: Optional[int] = None  # 0-100 similarity score
-    searched_name: Optional[str] = None  # The name that was searched
-
-class DilisenseResult(BaseModel):
-    """Dilisense or World-Check screening results"""
-    provider: str = "Dilisense Screening"
-    total_hits: int = 0
-    sanctions_hits: int = 0
-    pep_hits: int = 0
-    criminal_hits: int = 0
-    adverse_media_hits: int = 0
-    special_interest_hits: int = 0
-    records: List[DilisenseMatch] = Field(default_factory=list)
-    risk_level: str = "LOW"
-    fallback_used: bool = False
-    requested_provider: Optional[str] = None
-    actual_provider: Optional[str] = None
-
-class SanctionsMatch(BaseModel):
-    """Individual sanctions match record"""
-    source: Optional[str] = None
-    link: Optional[str] = None
-    snippet: Optional[str] = None
-    confidence: Optional[str] = None  # HIGH, MEDIUM, LOW
-
-class SanctionsResult(BaseModel):
-    """Sanctions screening result"""
-    is_sanctioned: bool = False
-    lists_checked: List[str] = Field(default_factory=list)
-    matches: List[SanctionsMatch] = Field(default_factory=list)
-
-class PositiveFindings(BaseModel):
-    """Positive/clear screening results"""
-    sanctions_clear: bool = True
-    sanctions_matches: Optional[SanctionsResult] = None
-    pep_clear: bool = True
-    adverse_media_clear: bool = True
-    behavioral_clear: bool = True
-    jurisdiction_clear: bool = True
-    dilisense_clear: bool = True
-    dilisense_matches: Optional[DilisenseResult] = None
-    fatf_check: Optional[FATFCheck] = None
-    checks_performed: List[ScreeningCheck] = Field(default_factory=list)
-    overall_clear: bool = True
+class AccountingEntriesResponse(BaseModel):
+    """Response containing generated accounting entries"""
+    invoice_id: str
+    journal_entries: List[JournalEntry]
+    summary: Dict[str, Any]
 
 
-class RiskScore(BaseModel):
-    """Risk assessment result"""
-    sanctions_risk: float = Field(ge=0, le=100)
-    pep_risk: float = Field(ge=0, le=100)
-    adverse_media_risk: float = Field(ge=0, le=100)
-    behavioral_risk: float = Field(ge=0, le=100, default=0)
-    jurisdiction_risk: float = Field(ge=0, le=100, default=0)
-    final_risk_score: float = Field(ge=0, le=100)
-    risk_level: RiskLevel
-    flags: List[str] = Field(default_factory=list)
-    recommendations: List[str] = Field(default_factory=list)
-    adverse_media_findings: Optional[AdverseMediaFindings] = None
-    positive_findings: Optional[PositiveFindings] = None
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
-
-
-class AnalysisRequest(BaseModel):
-    """Request model for manual analysis"""
-    entity_name: str
-    entity_type: str = "individual"
-    screening_provider: str = "dilisense"
-    country: Optional[str] = None  # Options: "worldcheck", "dilisense"
-    additional_info: Optional[Dict[str, Any]] = None
-
-
-class AnalysisResponse(BaseModel):
-    """Response model for analysis results"""
-    analysis_id: str
-    entity_name: str
-    entity_type: str
-    risk_score: float
-    risk_level: RiskLevel
-    sanctions_risk: float
-    pep_risk: float
-    adverse_media_risk: float
-    jurisdiction_risk: float = 0.0
-    flags: List[str]
-    recommendations: List[str]
-    adverse_media_findings: Optional[AdverseMediaFindings] = None
-    positive_findings: Optional[PositiveFindings] = None
-    timestamp: str
-    processing_time_ms: Optional[int] = None
-
-
-class DocumentAnalysisResponse(BaseModel):
-    """Response model for document analysis"""
-    analysis_id: str
-    document_type: DocumentType
-    extracted_data: Dict
-    risk_assessment: RiskScore
-    processing_time_ms: int
-    timestamp: str
-
+# ─── Dashboard Models ────────────────────────────────────
 
 class DashboardStats(BaseModel):
-    """Dashboard statistics model"""
-    total_analyses: int
-    high_risk_count: int
-    critical_count: int
-    average_risk_score: float
-    analyses: Dict = Field(default_factory=dict)
+    """Dashboard statistics"""
+    total_invoices: int = 0
+    pending_review: int = 0
+    approved: int = 0
+    posted: int = 0
+    total_payable: float = 0.0
+    total_receivable: float = 0.0
+    this_month_processed: int = 0
+    avg_processing_time: float = 0.0
+    recent_invoices: List[Dict[str, Any]] = []
+    monthly_totals: List[Dict[str, Any]] = []
 
 
-class SARFiling(BaseModel):
-    """SAR filing document model"""
-    sar_filing: str
-    ready_to_submit: bool
-    recipient: str = "FIU"
-    analysis_id: str
-    filing_date: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+# ─── Upload Response ─────────────────────────────────────
+
+class DocumentUploadResponse(BaseModel):
+    """Response after document upload and extraction"""
+    invoice_id: str
+    status: str
+    extracted_data: InvoiceExtracted
+    suggested_entries: List[JournalEntry] = []
+    ai_analysis: Optional[Dict[str, Any]] = None
+    processing_time: float
+    message: str

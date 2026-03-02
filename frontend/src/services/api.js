@@ -1,130 +1,130 @@
-import axios from 'axios'
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
-
-// Health Check
-export const healthCheck = async () => {
-  const response = await api.get('/health')
-  return response.data
-}
-
-// Dashboard Stats
-export const getDashboardStats = async () => {
-  const response = await api.get('/dashboard/stats')
-  return response.data
-}
-
-// Manual Entity Screening
-export const analyzeEntityManual = async (entityName, entityType = 'individual', additionalInfo = {}, screeningProvider = 'dilisense') => {
-  const response = await api.post('/analyze/manual', {
-    entity_name: entityName,
-    entity_type: entityType,
-    screening_provider: screeningProvider,
-    additional_info: additionalInfo,
-  })
-  return response.data
-}
-
-// Document Upload
-export const uploadDocument = async (file, documentType = null, screeningProvider = 'dilisense') => {
-  const formData = new FormData()
-  formData.append('file', file)
-  if (documentType) {
-    formData.append('document_type', documentType)
-  }
-  formData.append('screening_provider', screeningProvider)
-
-  const response = await api.post('/analyze/upload', formData, {
+async function apiRequest(endpoint, options = {}) {
+  const url = `${API_BASE}${endpoint}`;
+  const response = await fetch(url, {
+    ...options,
     headers: {
-      'Content-Type': 'multipart/form-data',
+      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...options.headers,
     },
-  })
-  return response.data
-}
-
-// CSV Bulk Analysis
-export const uploadCSVBulk = async (file, maxRows = 100) => {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('max_rows', maxRows)
-
-  const response = await api.post('/analyze/csv', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  })
-  return response.data
-}
-
-// Get Analysis by ID
-export const getAnalysis = async (analysisId) => {
-  const response = await api.get(`/analysis/${analysisId}`)
-  return response.data
-}
-
-// List Analyses
-export const listAnalyses = async (limit = 10, riskLevel = null) => {
-  const params = { limit }
-  if (riskLevel) {
-    params.risk_level = riskLevel
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `API Error: ${response.status}`);
   }
-  const response = await api.get('/analyses', { params })
-  return response.data
+  return await response.json();
 }
 
-// Delete Analysis
-export const deleteAnalysis = async (analysisId) => {
-  const response = await api.delete(`/analysis/${analysisId}`)
-  return response.data
-}
+export const getDashboardStats = () => apiRequest('/dashboard/stats');
 
-// Generate SAR
-export const generateSAR = async (analysisId) => {
-  const response = await api.post(`/sars/generate?analysis_id=${analysisId}`)
-  return response.data
-}
+export const getInvoices = (params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return apiRequest(`/invoices${query ? '?' + query : ''}`);
+};
 
-// Get Compliance Cases
-export const getComplianceCases = async (limit = 50, riskLevel = null) => {
-  const params = { limit }
-  if (riskLevel) {
-    params.risk_level = riskLevel
+export const getInvoice = (invoiceId) => apiRequest(`/invoices/${invoiceId}`);
+
+export const uploadInvoice = async (file, invoiceType = 'supplier', projectCode = '', costCenter = '') => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('invoice_type', invoiceType);
+  if (projectCode) formData.append('project_code', projectCode);
+  if (costCenter) formData.append('cost_center', costCenter);
+  return apiRequest('/invoices/upload', { method: 'POST', body: formData });
+};
+
+export const createManualInvoice = (data) =>
+  apiRequest('/invoices/manual', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateInvoiceStatus = (invoiceId, status) =>
+  apiRequest(`/invoices/${invoiceId}/status?status=${status}`, { method: 'PATCH' });
+
+export const deleteInvoice = (invoiceId) =>
+  apiRequest(`/invoices/${invoiceId}`, { method: 'DELETE' });
+
+export const getJournalEntries = (params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return apiRequest(`/accounting/entries${query ? '?' + query : ''}`);
+};
+
+export const postJournalEntry = (entryId) =>
+  apiRequest(`/accounting/entries/${entryId}/post`, { method: 'POST' });
+
+export const reverseJournalEntry = (entryId) =>
+  apiRequest(`/accounting/entries/${entryId}/reverse`, { method: 'POST' });
+
+export const getChartOfAccounts = (category = '') =>
+  apiRequest(`/accounting/chart-of-accounts${category ? '?category=' + category : ''}`);
+
+export const suggestAccount = (description, type = 'supplier') =>
+  apiRequest(`/accounting/suggest-account?description=${encodeURIComponent(description)}&type=${type}`);
+
+export const checkHealth = () => apiRequest('/health');
+
+// ─── Export ──────────────────────────────────────────────
+export const exportJournalEntriesExcel = async (status = 'posted') => {
+  const API_BASE2 = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  const url = `${API_BASE2}/accounting/export/excel?status=${status}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Export failed: ${response.status}`);
   }
-  const response = await api.get('/cases', { params })
-  return response.data
-}
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = `journal_entries_${status}_${new Date().toISOString().slice(0,10)}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+};
 
-// Assign Case
-export const assignCase = async (caseId, assignedTo) => {
-  const response = await api.post(`/cases/${caseId}/assign`, null, {
-    params: { assigned_to: assignedTo }
-  })
-  return response.data
-}
+// ─── Document Viewer ─────────────────────────────────────
+export const getInvoiceDocumentUrl = (invoiceId) => {
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  return `${base}/invoices/${invoiceId}/document`;
+};
 
-// Get Audit Trail
-export const getAuditTrail = async (caseId) => {
-  const response = await api.get(`/audit/${caseId}`)
-  return response.data
-}
 
-// Generate Compliance Report
-export const generateComplianceReport = async (startDate, endDate, format = 'json') => {
-  const response = await api.post('/reports/compliance', null, {
-    params: {
-      start_date: startDate,
-      end_date: endDate,
-      format: format
-    }
-  })
-  return response.data
-}
+// ─── Document Preview ────────────────────────────────────
+export const getInvoiceDocumentPreview = async (invoiceId, page = 0) => {
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  const response = await fetch(`${base}/invoices/${invoiceId}/document/preview?page=${page}`);
+  if (!response.ok) throw new Error('Preview not available');
+  return response.json();
+};
 
-export default api
+
+// ─── Reclassify ──────────────────────────────────────────
+export const reclassifyInvoice = async (invoiceId, userContext) => {
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  const response = await fetch(`${base}/invoices/${invoiceId}/reclassify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_context: userContext }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || 'Reclassification failed');
+  }
+  return response.json();
+};
+
+
+// ─── Classification Rules ────────────────────────────────
+export const getClassificationRules = async () => {
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  const response = await fetch(`${base}/accounting/classification-rules`);
+  if (!response.ok) throw new Error('Failed to fetch rules');
+  return response.json();
+};
+
+export const deleteClassificationRule = async (ruleId) => {
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  const response = await fetch(`${base}/accounting/classification-rules/${ruleId}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error('Failed to delete rule');
+  return response.json();
+};

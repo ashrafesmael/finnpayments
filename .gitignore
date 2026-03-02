@@ -89,3 +89,22 @@ frontend/.env.production
 # Temp files
 temp_uploads/
 data/*.json
+
+# Persistent uploads
+uploads/*
+!uploads/.gitkeep
+
+# Static generated
+static/*
+!static/.gitkeep
+
+# Sample data
+sample_invoices/*
+!sample_invoices/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Excel source data
+*.xlsx

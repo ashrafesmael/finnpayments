@@ -1,817 +1,1286 @@
 """
-FastAPI Application for AML Intelligence System
+FinnPayments - FastAPI Application
+REST API for invoice processing and accounting entries.
+Architecture mirrors FinnVerify's api.py.
 """
+
 import os
 import time
-import uuid
-from datetime import datetime
-from typing import Dict, List, Optional
+import json
+import shutil
 import logging
+from datetime import datetime
 from pathlib import Path
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel as PydanticBaseModel
 
-from .auth_api import router as auth_router, get_current_user
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, FileResponse
 
 from src.models import (
-    AnalysisRequest, AnalysisResponse, DocumentAnalysisResponse,
-    DashboardStats, SARFiling, RiskLevel, DocumentType
+    InvoiceStatus, InvoiceType, Currency,
+    InvoiceCreateRequest, InvoiceResponse,
+    DocumentUploadResponse, DashboardStats,
+    JournalEntry, AccountingEntriesResponse
 )
-from src.document_processor import DocumentProcessor
-from src.report_generator import generate_screening_report
-from src.screening_engine import ScreeningEngine
-from src.utils import generate_analysis_id, setup_logging, calculate_processing_time
-from src.database import db_manager
-# from src.aws_services import aws_manager  # AWS disabled
+from src.database import (
+    init_db, get_db, Invoice, InvoiceLineItemDB,
+    JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule
+)
+from src.invoice_engine import process_invoice, generate_invoice_id
+from src.accounting_engine import (
+    generate_accounting_entries, validate_journal_entry, suggest_account_code
+)
 
-# Setup logging
-logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("FinnPayments.API")
 
-# Initialize FastAPI app
+# ─── App Configuration ────────────────────────────────────
+
 app = FastAPI(
-    title="AML Intelligence System",
-    description="Real-Time Anti-Money Laundering Intelligence System using AI",
+    title="FinnPayments API",
+    description="Invoice Processing & Accounting Entries - A product of AlgoDynamix Ltd",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-# Add CORS middleware
+# CORS - allow frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Authentication router
-app.include_router(auth_router)
-
-# Initialize processors - PRODUCTION MODE: Real AI Services Only
-# Always use real LandingAI for document processing and real LLM for risk analysis
-# No mock databases - all analysis is done via LLM with real data
-document_processor = DocumentProcessor(use_mock=False)  # Real LandingAI ADE
-screening_engine = ScreeningEngine(use_mock=False, use_llm=True)  # Real LLM analysis, no mock data
-
-# In-memory storage for demo (use database in production)
-results_store: Dict[str, Dict] = {}
-upload_directory = Path("temp_uploads")
+# Static files & uploads
+upload_directory = Path("uploads")
 upload_directory.mkdir(exist_ok=True)
-
-# Mount static files
+# Keep temp_uploads for backward compatibility
+Path("temp_uploads").mkdir(exist_ok=True)
 static_directory = Path("static")
 static_directory.mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+except:
+    pass
+
+# In-memory results store (mirrors FinnVerify pattern)
+results_store: Dict[str, Dict] = {}
+
+
+# ─── Startup ──────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    init_db()
+    logger.info("🚀 FinnPayments API started")
+
+
+# ─── Root & Health ────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    """Root endpoint with system information"""
     return {
-        "message": "AML Intelligence System API",
+        "message": "FinnPayments API",
+        "product": "Invoice Processing & Accounting Entries",
+        "company": "AlgoDynamix Ltd",
         "version": "1.0.0",
         "status": "operational",
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
-            "dashboard_ui": "/dashboard",
-            "upload_analysis": "/analyze/upload",
-            "manual_analysis": "/analyze/manual",
-            "dashboard_stats": "/dashboard/stats"
+            "upload": "/invoices/upload",
+            "invoices": "/invoices",
+            "entries": "/accounting/entries",
+            "accounts": "/accounting/chart-of-accounts",
+            "dashboard": "/dashboard/stats",
         }
     }
 
-
-@app.get("/dashboard")
-async def dashboard():
-    """Serve the dashboard UI"""
-    return FileResponse("static/dashboard.html")
-
-
-
-@app.get("/report/{analysis_id}")
-async def generate_report(analysis_id: str):
-    """Generate PDF screening report for an analysis"""
-    from fastapi.responses import Response
-    
-    if analysis_id not in results_store:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    
-    result = results_store[analysis_id]
-    
-    if hasattr(result, 'model_dump'):
-        data = result.model_dump()
-    elif hasattr(result, 'dict'):
-        data = result.dict()
-    else:
-        data = dict(result)
-    
-    data['analysis_id'] = analysis_id
-
-    # Handle DocumentAnalysisResponse - flatten nested risk_assessment
-    if 'risk_assessment' in data and data['risk_assessment']:
-        risk = data['risk_assessment']
-        data['sanctions_risk'] = risk.get('sanctions_risk', 0)
-        data['pep_risk'] = risk.get('pep_risk', 0)
-        data['adverse_media_risk'] = risk.get('adverse_media_risk', 0)
-        data['behavioral_risk'] = risk.get('behavioral_risk', 0)
-        data['jurisdiction_risk'] = risk.get('jurisdiction_risk', 0)
-        data['risk_score'] = risk.get('final_risk_score', 0)
-        data['risk_level'] = risk.get('risk_level', 'LOW')
-        data['flags'] = risk.get('flags', [])
-        data['recommendations'] = risk.get('recommendations', [])
-        data['positive_findings'] = risk.get('positive_findings')
-        data['adverse_media_findings'] = risk.get('adverse_media_findings')
-        logger.info(f"📊 Flattened risk: score={data['risk_score']}, sanctions={data['sanctions_risk']}")
-    
-    # Get entity name from extracted_data for document uploads
-    if 'extracted_data' in data and data['extracted_data']:
-        extracted = data['extracted_data']
-        if not data.get('entity_name'):
-            data['entity_name'] = extracted.get('full_name', 'Unknown')
-        data['document_extraction'] = extracted
-        logger.info(f"📊 Entity from extraction: {data['entity_name']}")
-    
-    try:
-        pdf_content = generate_screening_report(data)
-        filename = f"finnverify_report_{analysis_id}.pdf"
-        return Response(
-            content=pdf_content,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-    except Exception as e:
-        logger.error(f"Report generation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "services": {
-            "document_processor": "operational",
-            "screening_engine": "operational",
-            "database": "operational"
-        }
+        "service": "FinnPayments",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
     }
 
 
-@app.post("/analyze/upload", response_model=DocumentAnalysisResponse)
-async def analyze_document(
-    background_tasks: BackgroundTasks,
+# ─── Invoice Upload & Processing ─────────────────────────
+
+@app.post("/invoices/upload", response_model=None)
+async def upload_invoice(
     file: UploadFile = File(...),
-    document_type: Optional[str] = Form(None),
-    screening_provider: Optional[str] = Form("dilisense")
+    invoice_type: str = Form("supplier"),
+    project_code: Optional[str] = Form(None),
+    cost_center: Optional[str] = Form(None),
 ):
     """
-    Upload and analyze a document (SAR, transaction record, KYC document)
+    Upload an invoice document for processing.
+    Supports PDF, images, CSV, Excel.
     """
     start_time = time.time()
-    analysis_id = generate_analysis_id()
     
+    # Validate file type
+    allowed_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.docx', '.doc', '.txt', '.csv', '.xlsx', '.xls', '.bmp', '.tiff', '.webp')
+    if not file.filename.lower().endswith(allowed_extensions):
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}")
+    
+    # Save uploaded file
+    file_path = upload_directory / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
     try:
-        logger.info(f"Starting document analysis: {analysis_id}")
-        
-        # Validate file type (including CSV for transaction data)
-        allowed_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.docx', '.doc', '.txt', '.bmp', '.tiff', '.webp', '.csv', '.xlsx', '.xls')
-        if not file.filename.lower().endswith(allowed_extensions):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Unsupported file type. Please upload one of: {', '.join(allowed_extensions)}"
-            )
-        
-        # Save uploaded file
-        file_path = upload_directory / f"{analysis_id}_{file.filename}"
-        with open(file_path, "wb") as buffer:
+        with open(file_path, "wb") as f:
             content = await file.read()
-            buffer.write(content)
-        
-        logger.info(f"File saved: {file_path}")
-        
-        # Process document
-        processing_result = document_processor.process_document(
-            str(file_path), 
-            document_type
-        )
-        
-        # Extract entity name for screening
-        extracted_data = processing_result["extracted_data"]
-        entity_name = None
-        
-        if processing_result["document_type"] == "SAR":
-            entity_name = extracted_data.get("subject_name")
-        elif processing_result["document_type"] == "TRANSACTION":
-            entity_name = extracted_data.get("originator_name")
-        
-        elif processing_result["document_type"] == "KYC":
-            entity_name = extracted_data.get("full_name")
-        
-        # Fallback: try all name fields if still unknown
-        if not entity_name or entity_name == "Unknown":
-            for field in ["full_name", "subject_name", "originator_name", "beneficiary_name"]:
-                candidate = extracted_data.get(field)
-                if candidate and candidate != "Unknown":
-                    entity_name = candidate
-                    logger.info(f"📋 Found name in fallback field {field}: {entity_name}")
-                    break
-        
-        # Perform risk screening if entity name found
-        risk_assessment = None
-        if entity_name:
-            # Add transaction context for behavioral analysis
-            context = {
-                "transaction_amount": extracted_data.get("transaction_amount", 0),
-                "cross_border": False  # Could be determined from document
-            }
-            
-            risk_assessment = screening_engine.screen_entity(
-                entity_name, 
-                "individual",
-                context,
-                screening_provider=screening_provider
-            )
-        
-        processing_time = calculate_processing_time(start_time, time.time())
-        
-        # Create response
-        response = DocumentAnalysisResponse(
-            analysis_id=analysis_id,
-            document_type=DocumentType(processing_result["document_type"]),
-            extracted_data=extracted_data,
-            risk_assessment=risk_assessment.dict() if risk_assessment else None,
-            processing_time_ms=processing_time,
-            timestamp=datetime.utcnow().isoformat()
-        )
-        
-        # Store results in database
-        try:
-            case_id = db_manager.save_compliance_case({
-                "analysis_id": analysis_id,
-                "entity_name": entity_name or "Unknown",
-                "entity_type": "document_analysis",
-                "risk_score": risk_assessment.final_risk_score if risk_assessment else 0,
-                "risk_level": risk_assessment.risk_level if risk_assessment else "LOW"
-            })
-            
-            # Save document extraction results
-            db_manager.save_document_extraction(case_id, processing_result)
-            
-            # Save screening results if available
-            if risk_assessment:
-                db_manager.save_screening_result(case_id, risk_assessment.dict())
-                
-                # Store in DynamoDB
-                # AWS disabled: aws_manager.store_risk_score_dynamodb(analysis_id, risk_assessment.dict())
-            
-            # Upload document to S3
-            # AWS disabled: s3_url = aws_manager.upload_document_to_s3(str(file_path), analysis_id)
-            
-            # Send to processing queue
-            # AWS disabled: aws_manager.send_to_processing_queue({
-                # "analysis_id": analysis_id,
-                # "case_id": case_id,
-                # "document_type": processing_result["document_type"],
-                # "priority": "high" if risk_assessment and risk_assessment.risk_level in ["HIGH", "CRITICAL"] else "normal"
-            # })
-            
-        except Exception as e:
-            logger.error(f"Failed to save to database/AWS: {e}")
-        
-        # Store results in memory for backward compatibility
-        results_store[analysis_id] = response.dict()
-        
-        # Schedule cleanup of uploaded file
-        background_tasks.add_task(cleanup_file, file_path)
-        
-        logger.info(f"✓ Document analysis complete: {analysis_id}")
-        return response
-        
+            f.write(content)
+        logger.info(f"📁 Saved upload: {file_path} ({len(content)} bytes)")
     except Exception as e:
-        logger.error(f"Document analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/analyze/manual", response_model=AnalysisResponse)
-async def analyze_entity_manual(request: AnalysisRequest):
-    """
-    Manually screen an entity by name (for testing and manual checks)
-    """
-    start_time = time.time()
-    analysis_id = generate_analysis_id()
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
     
+    # Process the invoice
     try:
-        logger.info(f"Starting manual analysis: {analysis_id} for {request.entity_name}")
-        
-        # Perform screening - include additional_info from request (e.g., nationality for FATF check)
-        additional_context = {"manual_analysis": True}
-        # Add country as nationality for FATF jurisdiction check
-        if hasattr(request, 'country') and request.country:
-            additional_context["nationality"] = request.country
-        if request.additional_info:
-            additional_context.update(request.additional_info)
-        
-        risk_score_obj = screening_engine.screen_entity(
-            request.entity_name,
-            request.entity_type,
-            additional_context,
-            screening_provider=request.screening_provider
-        )
-        
-        processing_time = calculate_processing_time(start_time, time.time())
-        
-        # Create response
-        response = AnalysisResponse(
-            analysis_id=analysis_id,
-            entity_name=request.entity_name,
-            entity_type=request.entity_type,
-            risk_score=risk_score_obj.final_risk_score,
-            risk_level=risk_score_obj.risk_level,
-            sanctions_risk=risk_score_obj.sanctions_risk,
-            pep_risk=risk_score_obj.pep_risk,
-            adverse_media_risk=risk_score_obj.adverse_media_risk,
-            jurisdiction_risk=risk_score_obj.jurisdiction_risk,
-            flags=risk_score_obj.flags,
-            recommendations=risk_score_obj.recommendations,
-            adverse_media_findings=risk_score_obj.adverse_media_findings,
-            positive_findings=risk_score_obj.positive_findings,
-            timestamp=risk_score_obj.timestamp,
-            processing_time_ms=processing_time
-        )
-        
-        # Store results in database
-        try:
-            case_id = db_manager.save_compliance_case(response.dict())
-            db_manager.save_screening_result(case_id, risk_score_obj.dict())
-            
-            # Store in DynamoDB
-            # AWS disabled: aws_manager.store_risk_score_dynamodb(analysis_id, risk_score_obj.dict())
-            
-        except Exception as e:
-            logger.error(f"Failed to save to database/AWS: {e}")
-        
-        # Store results in memory for backward compatibility
-        results_store[analysis_id] = response.dict()
-        
-        logger.info(f"✓ Manual analysis complete: {analysis_id}")
-        return response
-        
+        result = await process_invoice(str(file_path), invoice_type)
     except Exception as e:
-        logger.error(f"Manual analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/analysis/{analysis_id}")
-async def get_analysis(analysis_id: str):
-    """Retrieve previous analysis results"""
+        logger.error(f"❌ Processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
     
-    if analysis_id not in results_store:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    
-    return results_store[analysis_id]
-
-
-@app.get("/dashboard/stats", response_model=DashboardStats)
-async def get_dashboard_stats():
-    """Get aggregated statistics for dashboard"""
-    
-    # Try to get stats from database first
-    try:
-        db_stats = db_manager.get_dashboard_stats()
-        if db_stats["total_analyses"] > 0:
-            return DashboardStats(**db_stats, analyses=results_store)
-    except Exception as e:
-        logger.error(f"Failed to get database stats: {e}")
-    
-    # Fall back to in-memory stats
-    if not results_store:
-        return DashboardStats(
-            total_analyses=0,
-            high_risk_count=0,
-            critical_count=0,
-            average_risk_score=0.0
-        )
-    
-    total = len(results_store)
-    high_risk = 0
-    critical = 0
-    total_risk_score = 0
-    
-    for result in results_store.values():
-        risk_level = result.get("risk_level")
-        if risk_level == "HIGH":
-            high_risk += 1
-        elif risk_level == "CRITICAL":
-            critical += 1
-        
-        # Get risk score from different response types
-        risk_score = result.get("risk_score") or result.get("risk_assessment", {}).get("final_risk_score", 0)
-        total_risk_score += risk_score
-    
-    return DashboardStats(
-        total_analyses=total,
-        high_risk_count=high_risk,
-        critical_count=critical,
-        average_risk_score=total_risk_score / total if total > 0 else 0,
-        analyses=results_store
-    )
-
-
-@app.post("/sars/generate", response_model=SARFiling)
-async def generate_sar(analysis_id: str):
-    """Generate SAR filing from analysis"""
-    
-    if analysis_id not in results_store:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    
-    analysis = results_store[analysis_id]
-    
-    # Check if analysis warrants SAR filing
-    risk_level = analysis.get("risk_level")
-    risk_assessment = analysis.get("risk_assessment", {})
-    
-    if risk_level != "CRITICAL" and risk_assessment.get("risk_level") != "CRITICAL":
-        raise HTTPException(
-            status_code=400, 
-            detail="Analysis must be CRITICAL risk level to file SAR"
-        )
-    
-    # Generate SAR filing document
-    entity_name = analysis.get("entity_name") or "Unknown Entity"
-    risk_score = analysis.get("risk_score") or risk_assessment.get("final_risk_score", 0)
-    flags = analysis.get("flags") or risk_assessment.get("flags", [])
-    recommendations = analysis.get("recommendations") or risk_assessment.get("recommendations", [])
-    
-    sar_filing_text = f"""
-SUSPICIOUS ACTIVITY REPORT (SAR) - FORM 111
-
-Analysis ID: {analysis_id}
-Filing Date: {datetime.utcnow().strftime('%Y-%m-%d')}
-Filing Institution: AML Intelligence System Demo Bank
-Subject Name: {entity_name}
-Risk Level: {risk_level or risk_assessment.get('risk_level')}
-Risk Score: {risk_score:.1f}/100
-
-REASONS FOR FILING:
-{chr(10).join(f"• {flag}" for flag in flags)}
-
-RECOMMENDED ACTIONS:
-{chr(10).join(f"• {rec}" for rec in recommendations)}
-
-NARRATIVE:
-This SAR is filed based on automated analysis using advanced AI screening 
-technology. The subject has been identified as presenting critical risk 
-factors that warrant immediate regulatory attention and investigation.
-
-All referenced documents and evidence are available in the case file 
-under analysis ID {analysis_id}.
-
-This filing complies with FIU requirements for suspicious activity reporting.
-    """.strip()
-    
-    return SARFiling(
-        sar_filing=sar_filing_text,
-        ready_to_submit=True,
-        recipient="FIU",
-        analysis_id=analysis_id
-    )
-
-
-@app.get("/analyses")
-async def list_analyses(
-    limit: int = 10,
-    risk_level: Optional[str] = None
-):
-    """List recent analyses with optional filtering"""
-    
-    analyses = list(results_store.values())
-    
-    # Filter by risk level if specified
-    if risk_level:
-        analyses = [
-            a for a in analyses 
-            if a.get("risk_level") == risk_level or 
-               a.get("risk_assessment", {}).get("risk_level") == risk_level
-        ]
-    
-    # Sort by timestamp (most recent first)
-    analyses.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    
-    # Limit results
-    analyses = analyses[:limit]
-    
-    # Return as array directly for easier frontend handling
-    return analyses
-
-
-@app.get("/test/csv")
-async def test_csv_endpoint():
-    """Test endpoint to verify CSV functionality is available"""
-    return {"message": "CSV endpoint is working", "status": "ok"}
-
-
-@app.post("/analyze/csv")
-async def analyze_csv_bulk(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    max_rows: int = 100
-):
-    """
-    Analyze CSV file with multiple transactions for bulk screening
-    """
-    start_time = time.time()
-    analysis_id = generate_analysis_id()
-    
-    try:
-        logger.info(f"Starting CSV bulk analysis: {analysis_id}")
-        logger.info(f"File details: name={file.filename}, content_type={file.content_type}")
-        
-        # Validate CSV file
-        if not file.filename or not file.filename.lower().endswith('.csv'):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Please upload a CSV file. Received: {file.filename}"
-            )
-        
-        # Save uploaded file
-        file_path = upload_directory / f"{analysis_id}_{file.filename}"
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        logger.info(f"CSV file saved: {file_path}")
-        
-        # Process CSV
-        try:
-            import pandas as pd
-            df = pd.read_csv(file_path)
-            
-            if len(df) == 0:
-                raise HTTPException(status_code=400, detail="CSV file is empty")
-                
-            logger.info(f"CSV loaded successfully: {len(df)} rows, {len(df.columns)} columns")
-            
-        except pd.errors.EmptyDataError:
-            raise HTTPException(status_code=400, detail="CSV file is empty or invalid")
-        except pd.errors.ParserError as e:
-            raise HTTPException(status_code=400, detail=f"CSV parsing error: {str(e)}")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to read CSV file: {str(e)}")
-        
-        # Limit rows for demo
-        df_limited = df.head(max_rows)
-        
-        # Process each row
-        results = []
-        high_risk_count = 0
-        
-        logger.info(f"Processing {len(df_limited)} rows from CSV")
-        
-        for idx, row in df_limited.iterrows():
+    # Handle multi-invoice PDF (result is a list)
+    if isinstance(result, list):
+        logger.info(f"📋 Multi-invoice upload: {len(result)} invoices detected")
+        for r in result:
             try:
-                # Extract entity name from row (case-insensitive column matching)
-                entity_name = None
-                possible_name_columns = ['name', 'sender', 'originator', 'from_name', 'customer_name', 'sender_name']
-                
-                # Check columns case-insensitively
-                for col in row.index:
-                    col_lower = col.lower().replace(' ', '_')
-                    if any(name_col in col_lower for name_col in possible_name_columns):
-                        entity_name = str(row[col])
-                        break
-                
-                if not entity_name or str(entity_name).lower() in ['nan', 'none', '', 'null']:
-                    entity_name = f"Entity_{idx + 1}"
-                
-                # Extract amount (try multiple column names)
-                amount = 0
-                for amount_col in ['amount', 'value', 'sum', 'transaction_amount']:
-                    if amount_col in row.index:
-                        try:
-                            amount = float(str(row[amount_col]).replace('$', '').replace(',', ''))
-                            break
-                        except (ValueError, TypeError):
-                            continue
-                
-                # Screen entity
-                risk_assessment = screening_engine.screen_entity(
-                    entity_name,
-                    "individual",
-                    {"transaction_amount": amount}
-                )
-                
-                if risk_assessment.risk_level in ['HIGH', 'CRITICAL']:
-                    high_risk_count += 1
-                
-                results.append({
-                    "row_number": idx + 1,
-                    "entity_name": entity_name,
-                    "risk_score": risk_assessment.final_risk_score,
-                    "risk_level": risk_assessment.risk_level,
-                    "flags": risk_assessment.flags,
-                    "amount": amount
-                })
-                
+                _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center)
+                results_store[r["invoice_id"]] = r
             except Exception as e:
-                logger.warning(f"Failed to process row {idx}: {e}")
-                results.append({
-                    "row_number": idx + 1,
-                    "entity_name": f"Error_Row_{idx}",
-                    "risk_score": 0,
-                    "risk_level": "ERROR",
-                    "flags": [f"Processing error: {str(e)}"],
-                    "amount": 0
-                })
+                logger.error(f"❌ Database save error for {r['invoice_id']}: {e}")
         
-        processing_time = calculate_processing_time(start_time, time.time())
-        
-        # Create summary response
-        response = {
-            "analysis_id": analysis_id,
-            "file_name": file.filename,
-            "total_rows": len(df),
-            "processed_rows": len(results),
-            "high_risk_count": high_risk_count,
-            "processing_time_ms": processing_time,
-            "timestamp": datetime.utcnow().isoformat(),
-            "results": results,
-            "summary": {
-                "low_risk": len([r for r in results if r["risk_level"] == "LOW"]),
-                "medium_risk": len([r for r in results if r["risk_level"] == "MEDIUM"]),
-                "high_risk": len([r for r in results if r["risk_level"] == "HIGH"]),
-                "critical_risk": len([r for r in results if r["risk_level"] == "CRITICAL"]),
-                "errors": len([r for r in results if r["risk_level"] == "ERROR"])
-            }
+        total_time = time.time() - start_time
+        return {
+            "multi_invoice": True,
+            "count": len(result),
+            "invoices": result,
+            "processing_time": round(total_time, 2),
+            "message": f"{len(result)} invoices detected and processed in {total_time:.1f}s"
         }
-        
-        # Store results
-        results_store[analysis_id] = response
-        
-        # Schedule cleanup
-        background_tasks.add_task(cleanup_file, file_path)
-        
-        logger.info(f"✓ CSV bulk analysis complete: {analysis_id}")
-        return response
-        
+    
+    # Single invoice
+    try:
+        _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center)
     except Exception as e:
-        logger.error(f"CSV bulk analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/analysis/{analysis_id}")
-async def delete_analysis(analysis_id: str):
-    """Delete an analysis (for cleanup/testing)"""
+        logger.error(f"❌ Database save error: {e}")
     
-    if analysis_id not in results_store:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+    results_store[result["invoice_id"]] = result
     
-    del results_store[analysis_id]
+    processing_time = time.time() - start_time
+    result["processing_time"] = round(processing_time, 2)
     
-    return {"message": f"Analysis {analysis_id} deleted successfully"}
+    return result
 
 
-@app.get("/cases")
-async def get_compliance_cases(
-    limit: int = 50,
-    risk_level: Optional[str] = None
+@app.post("/invoices/manual")
+async def create_manual_invoice(request: InvoiceCreateRequest):
+    """Create an invoice manually (no document upload)"""
+    invoice_id = generate_invoice_id()
+    
+    invoice_data = {
+        "vendor_name": request.vendor_name,
+        "vendor_brn": request.vendor_brn,
+        "invoice_number": request.invoice_number,
+        "invoice_date": request.invoice_date,
+        "due_date": request.due_date,
+        "currency": request.currency.value if hasattr(request.currency, 'value') else request.currency,
+        "line_items": [item.model_dump() for item in request.line_items],
+        "subtotal": sum(item.amount - item.tax_amount for item in request.line_items),
+        "tax_total": sum(item.tax_amount for item in request.line_items),
+        "total_amount": sum(item.amount for item in request.line_items),
+        "notes": request.notes,
+        "project_code": request.project_code,
+        "cost_center": request.cost_center,
+        "confidence_score": 1.0,
+    }
+    
+    # Generate accounting entries
+    entries = generate_accounting_entries(invoice_id, invoice_data, request.invoice_type.value)
+    
+    result = {
+        "invoice_id": invoice_id,
+        "status": "pending_review",
+        "extracted_data": invoice_data,
+        "suggested_entries": entries,
+        "processing_time": 0.0,
+        "message": "Manual invoice created successfully"
+    }
+    
+    _save_invoice_to_db(result, request.invoice_type.value, None, request.project_code, request.cost_center)
+    results_store[invoice_id] = result
+    
+    return result
+
+
+# ─── Invoice CRUD ─────────────────────────────────────────
+
+@app.get("/invoices")
+async def list_invoices(
+    status: Optional[str] = None,
+    invoice_type: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+    search: Optional[str] = None,
 ):
-    """Get compliance cases from database"""
-    try:
-        cases = db_manager.get_compliance_cases(limit=limit, risk_level=risk_level)
+    """List all invoices with optional filtering"""
+    with get_db() as db:
+        query = db.query(Invoice).order_by(Invoice.created_at.desc())
+        
+        if status:
+            query = query.filter(Invoice.status == status)
+        if invoice_type:
+            query = query.filter(Invoice.invoice_type == invoice_type)
+        if search:
+            query = query.filter(
+                (Invoice.vendor_name.ilike(f"%{search}%")) |
+                (Invoice.invoice_number.ilike(f"%{search}%"))
+            )
+        
+        total = query.count()
+        invoices = query.offset(offset).limit(limit).all()
+        
         return {
-            "total": len(cases),
-            "cases": cases
+            "total": total,
+            "invoices": [_invoice_to_dict(inv) for inv in invoices],
+            "limit": limit,
+            "offset": offset,
         }
-    except Exception as e:
-        logger.error(f"Failed to get compliance cases: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve cases")
 
 
-@app.post("/cases/{case_id}/assign")
-async def assign_case(case_id: str, assigned_to: str):
-    """Assign a case to a compliance officer"""
-    try:
-        # This would update the database
-        db_manager.log_action(
-            case_id=case_id,
-            action="CASE_ASSIGNED",
-            user_id=assigned_to,
-            details={"assigned_to": assigned_to}
-        )
+@app.get("/invoices/{invoice_id}")
+async def get_invoice(invoice_id: str):
+    """Get invoice details with line items and journal entries"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
         
-        return {"message": f"Case {case_id} assigned to {assigned_to}"}
+        result = _invoice_to_dict(invoice)
         
-    except Exception as e:
-        logger.error(f"Failed to assign case: {e}")
-        raise HTTPException(status_code=500, detail="Failed to assign case")
+        # Include line items
+        result["line_items"] = [
+            {
+                "line_number": li.line_number,
+                "description": li.description,
+                "quantity": li.quantity,
+                "unit_price": li.unit_price,
+                "amount": li.amount,
+                "tax_rate": li.tax_rate,
+                "tax_amount": li.tax_amount,
+                "account_code": li.account_code,
+                "cost_center": li.cost_center,
+                "project_code": li.project_code,
+            }
+            for li in invoice.line_items
+        ]
+        
+        # Include journal entries
+        result["journal_entries"] = [
+            {
+                "entry_id": je.entry_id,
+                "entry_date": je.entry_date,
+                "reference": je.reference,
+                "description": je.description,
+                "total_debit": je.total_debit,
+                "total_credit": je.total_credit,
+                "is_balanced": je.is_balanced,
+                "status": je.status,
+                "lines": [
+                    {
+                        "account_code": jel.account_code,
+                        "account_name": jel.account_name,
+                        "description": jel.description,
+                        "debit": jel.debit,
+                        "credit": jel.credit,
+                        "cost_center": jel.cost_center,
+                        "project_code": jel.project_code,
+                    }
+                    for jel in je.lines
+                ]
+            }
+            for je in invoice.journal_entries
+        ]
+        
+        # Include from memory store if available
+        if invoice_id in results_store:
+            result["ai_analysis"] = results_store[invoice_id].get("extracted_data", {}).get("notes")
+        
+        return result
 
 
-@app.get("/audit/{case_id}")
-async def get_audit_trail(case_id: str):
-    """Get audit trail for a specific case"""
-    try:
-        # This would query the audit log from database
+@app.patch("/invoices/{invoice_id}/status")
+async def update_invoice_status(invoice_id: str, status: str):
+    """Update invoice status (approve, reject, post, etc.)"""
+    valid_statuses = [s.value for s in InvoiceStatus]
+    if status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+    
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        
+        old_status = invoice.status
+        invoice.status = status
+        invoice.updated_at = datetime.utcnow()
+        
+        # If posting, also post journal entries
+        if status == "posted":
+            for je in invoice.journal_entries:
+                je.status = "posted"
+        
+        db.commit()
+        
         return {
-            "case_id": case_id,
-            "audit_trail": [
+            "invoice_id": invoice_id,
+            "old_status": old_status,
+            "new_status": status,
+            "message": f"Invoice status updated to {status}"
+        }
+
+
+
+
+@app.get("/invoices/{invoice_id}/document")
+async def get_invoice_document(invoice_id: str):
+    """Serve the original uploaded document for an invoice"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not invoice.source_file:
+            raise HTTPException(status_code=404, detail="No document attached to this invoice")
+
+        file_path = Path(invoice.source_file)
+
+        # Also check temp_uploads if file was uploaded before migration
+        if not file_path.exists():
+            alt_path = Path("temp_uploads") / file_path.name
+            if alt_path.exists():
+                file_path = alt_path
+            else:
+                raise HTTPException(status_code=404, detail="Document file not found on disk")
+
+        # Determine media type
+        ext = file_path.suffix.lower()
+        media_types = {
+            ".pdf": "application/pdf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".bmp": "image/bmp",
+            ".tiff": "image/tiff",
+            ".webp": "image/webp",
+        }
+        media_type = media_types.get(ext, "application/octet-stream")
+
+        return FileResponse(
+            str(file_path),
+            media_type=media_type,
+            filename=file_path.name,
+            headers={"Content-Disposition": f"inline; filename={file_path.name}"}
+        )
+
+
+
+@app.get("/invoices/{invoice_id}/document/preview")
+async def get_invoice_document_preview(invoice_id: str, page: int = Query(0, ge=0)):
+    """Return invoice document pages as base64 images for inline viewing."""
+    import base64
+    from io import BytesIO
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not invoice.source_file:
+            raise HTTPException(status_code=404, detail="No document attached")
+
+        file_path = Path(invoice.source_file)
+        if not file_path.exists():
+            # Check temp_uploads fallback
+            alt_path = Path("temp_uploads") / file_path.name
+            if alt_path.exists():
+                file_path = alt_path
+            else:
+                raise HTTPException(status_code=404, detail="File not found on disk")
+
+        ext = file_path.suffix.lower()
+
+        if ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"):
+            # Image file: return as-is
+            with open(file_path, "rb") as f:
+                img_data = base64.b64encode(f.read()).decode()
+            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "bmp": "image/bmp", "webp": "image/webp", "tiff": "image/tiff"}
+            return {
+                "total_pages": 1,
+                "current_page": 0,
+                "mime_type": mime.get(ext.lstrip("."), "image/png"),
+                "image": img_data,
+            }
+
+        elif ext == ".pdf":
+            try:
+                from pdf2image import convert_from_path
+                # Get total pages first
+                from pdf2image.pdf2image import pdfinfo_from_path
+                info = pdfinfo_from_path(str(file_path))
+                total_pages = info.get("Pages", 1)
+
+                # Clamp page number
+                page = min(page, total_pages - 1)
+
+                # Convert requested page (1-indexed for pdf2image)
+                images = convert_from_path(
+                    str(file_path),
+                    first_page=page + 1,
+                    last_page=page + 1,
+                    dpi=150,
+                    fmt="png"
+                )
+
+                if images:
+                    buf = BytesIO()
+                    images[0].save(buf, format="PNG")
+                    img_data = base64.b64encode(buf.getvalue()).decode()
+                    return {
+                        "total_pages": total_pages,
+                        "current_page": page,
+                        "mime_type": "image/png",
+                        "image": img_data,
+                    }
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to render PDF page")
+            except ImportError:
+                raise HTTPException(status_code=500, detail="pdf2image not installed")
+        else:
+            raise HTTPException(status_code=400, detail=f"Preview not supported for {ext} files")
+
+
+
+class ReclassifyRequest(PydanticBaseModel):
+    user_context: str
+
+
+@app.post("/invoices/{invoice_id}/reclassify")
+async def reclassify_invoice(invoice_id: str, request: ReclassifyRequest):
+    """
+    Reclassify invoice line items using user-provided context.
+    Called when the system defaulted to Licences (01-6000-04) and the user
+    provides additional context about the nature of the expense.
+    """
+    import httpx
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        line_items = db.query(InvoiceLineItemDB).filter(
+            InvoiceLineItemDB.invoice_id == invoice_id
+        ).order_by(InvoiceLineItemDB.line_number).all()
+
+        if not line_items:
+            raise HTTPException(status_code=400, detail="No line items found")
+
+        # Build context for LLM
+        items_text = "\n".join([
+            f"  Line {li.line_number}: {li.description} | Amount: {li.amount} | Current account: {li.account_code}"
+            for li in line_items
+        ])
+
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="AI service not configured")
+
+        prompt = f"""You are an accounting classification expert for Mont Choisy Golf, a Mauritian property/golf company.
+
+VENDOR: {invoice.vendor_name}
+INVOICE #: {invoice.invoice_number}
+DATE: {invoice.invoice_date}
+TOTAL: {invoice.currency} {invoice.total_amount}
+
+LINE ITEMS:
+{items_text}
+
+USER CONTEXT (the user has described this expense as):
+"{request.user_context}"
+
+CHART OF ACCOUNTS (assign the best account_code per line item):
+01-5100-04  Basic Salary_Admin
+01-5102-04  Statutory Contribution (NPS & TWEF)
+01-5105-04  Staff Travelling Cost
+01-5108-04  Recruitment Cost
+01-5110-04  Training Staff Cost
+01-5133-04  Medical Scheme
+01-5002-01  Golf Cart Maintenance & General
+01-5007-02  Event Cost
+01-5201-01  Operating Supplies_Golf Course
+01-6000-04  Licences (software licences, permits, domain renewals)
+01-6001-04  Insurance_General
+01-6002-04  Telephone, Mobiles and Internet
+01-6003-04  ICT Expenses (software, IT services, hosting, SaaS, hardware)
+01-6005-04  Printing, Postage & Stationery
+01-6006-04  Professional Fees ADM (legal, consulting, advisory, law firms, court costs, notary, architects)
+01-6007-04  Health & Safety Expenses
+01-6008-04  Security Fees (security companies, cash handling, guarding)
+01-6008-06  Marketing Cost_Others
+01-6009-04  Pest Control
+01-6010-04  Waste Removal
+01-6010-06  General Marketing Materials
+01-6015-04  Cleaning Expenses
+01-6020-04  Office Supplies & Consumables
+01-6021-04  Payroll Processing Fee
+01-6022-04  Audit Fee
+01-6023-04  Secretarial Fee
+01-6025-04  Taxation Fee
+01-6030-04  Subscriptions & Memberships
+01-6050-05  R&M - Golf Course Fertilizers
+01-6051-05  R&M - Fuel and Diesel
+01-6053-05  R&M - Equipment Repairs
+01-6057-05  R&M - Golf Course Chemicals
+01-6058-05  R&M - Golf Course (Plant, Seed, Sand)
+01-6059-05  R&M - Golf Course Maintenance Others
+01-6070-05  Building Maintenance (painting, plumbing, electrical)
+01-6075-05  External Maintenance Contractor
+01-6076-05  Gas Clubhouse
+01-6080-05  R&M - Irrigation Pumping Station
+01-6090-05  Vehicle Running Expenses
+01-6100-04  Uniforms & Protective Clothing
+01-6250-04  Electricity (CEB, power)
+01-6251-04  Water (CWA)
+01-6300-07  Rental of Land
+01-6301-07  Credit Card Commission and Bank Charges
+01-6302-07  Surcharge & Penalties
+01-6401-07  Corporate Management Fee
+01-6403-07  Estate Shared Cost
+01-8001-08  Bank Interest on Loan
+01-1005-01  PPE-Cost-Other Equipment (capital purchases)
+01-1006-01  PPE-Cost-Furniture and Fittings (capital purchases)
+
+Based on the vendor name, line item descriptions, and the user's context, assign the BEST matching account_code for EACH line item.
+
+Return ONLY a JSON array like:
+[
+  {{"line_number": 1, "account_code": "01-XXXX-XX", "reason": "Brief explanation"}},
+  {{"line_number": 2, "account_code": "01-XXXX-XX", "reason": "Brief explanation"}}
+]
+
+Return ONLY valid JSON, no markdown."""
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": "You are an expert accountant. Return only valid JSON arrays."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 1000
+                    }
+                )
+
+                if response.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"AI service error: {response.status_code}")
+
+                import re as re_mod
+                result = response.json()
+                ai_content = result["choices"][0]["message"]["content"]
+                ai_content = re_mod.sub(r'^```json\s*', '', ai_content)
+                ai_content = re_mod.sub(r'\s*```$', '', ai_content)
+                classifications = json.loads(ai_content)
+
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=502, detail="AI returned invalid response")
+        except Exception as e:
+            logger.error(f"Reclassify error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+        # Update line items with new account codes
+        from src.accounting_engine import lookup_account_name
+        updates = []
+        for cls in classifications:
+            line_num = cls.get("line_number")
+            new_code = cls.get("account_code")
+            reason = cls.get("reason", "")
+            if not line_num or not new_code:
+                continue
+
+            for li in line_items:
+                if li.line_number == line_num:
+                    old_code = li.account_code
+                    li.account_code = new_code
+                    updates.append({
+                        "line_number": line_num,
+                        "old_account": old_code,
+                        "new_account": new_code,
+                        "account_name": lookup_account_name(new_code),
+                        "reason": reason,
+                        "description": li.description,
+                    })
+                    break
+
+        # Delete old journal entries and regenerate
+        old_entries = db.query(JournalEntryDB).filter(
+            JournalEntryDB.invoice_id == invoice_id
+        ).all()
+        for oe in old_entries:
+            db.query(JournalEntryLineDB).filter(
+                JournalEntryLineDB.entry_id == oe.entry_id
+            ).delete()
+            db.delete(oe)
+
+        # Rebuild invoice data for entry generation
+        invoice_data = {
+            "vendor_name": invoice.vendor_name,
+            "invoice_number": invoice.invoice_number,
+            "invoice_date": invoice.invoice_date,
+            "total_amount": invoice.total_amount,
+            "tax_total": invoice.tax_total,
+            "subtotal": invoice.subtotal,
+            "line_items": [
                 {
-                    "timestamp": "2024-11-01T15:30:00Z",
-                    "action": "CASE_CREATED",
-                    "user_id": "system",
-                    "details": {"analysis_id": "AML-12345678"}
-                },
-                {
-                    "timestamp": "2024-11-01T15:31:00Z",
-                    "action": "SCREENING_COMPLETED",
-                    "user_id": "system",
-                    "details": {"risk_level": "MEDIUM"}
+                    "description": li.description,
+                    "amount": li.amount,
+                    "tax_amount": li.tax_amount,
+                    "account_code": li.account_code,
                 }
+                for li in line_items
+            ],
+            "suggested_cost_center": invoice.cost_center,
+            "project_code": invoice.project_code,
+        }
+
+        from src.accounting_engine import generate_accounting_entries
+        from src.invoice_engine import generate_entry_id
+        new_entries = generate_accounting_entries(invoice_id, invoice_data, invoice.invoice_type or "supplier")
+
+        for entry in new_entries:
+            je = JournalEntryDB(
+                entry_id=entry["entry_id"],
+                invoice_id=invoice_id,
+                entry_date=entry.get("entry_date"),
+                reference=entry.get("reference"),
+                description=entry.get("description"),
+                total_debit=entry.get("total_debit", 0),
+                total_credit=entry.get("total_credit", 0),
+                is_balanced=entry.get("is_balanced", True),
+                status="draft",
+                created_by="reclassify",
+            )
+            db.add(je)
+            for line in entry.get("lines", []):
+                jel = JournalEntryLineDB(
+                    entry_id=entry["entry_id"],
+                    account_code=line.get("account_code"),
+                    account_name=line.get("account_name"),
+                    description=line.get("description"),
+                    debit=line.get("debit", 0),
+                    credit=line.get("credit", 0),
+                    cost_center=line.get("cost_center"),
+                    project_code=line.get("project_code"),
+                )
+                db.add(jel)
+
+        db.commit()
+        # Save classification rules for future learning
+        for u in updates:
+            if u["new_account"] != "01-6000-04":  # Don't learn the default
+                # Check if rule already exists for this vendor
+                existing = db.query(ClassificationRule).filter(
+                    ClassificationRule.vendor_name == invoice.vendor_name,
+                    ClassificationRule.account_code == u["new_account"],
+                ).first()
+                if existing:
+                    existing.user_context = request.user_context
+                    existing.times_used = (existing.times_used or 0) + 1
+                    existing.updated_at = datetime.utcnow()
+                else:
+                    db.add(ClassificationRule(
+                        vendor_name=invoice.vendor_name,
+                        description_pattern=u.get("description", "")[:200] if u.get("description") else None,
+                        account_code=u["new_account"],
+                        account_name=u.get("account_name", ""),
+                        user_context=request.user_context,
+                        source="reclassify",
+                        times_used=1,
+                    ))
+                db.commit()
+
+        logger.info(f"🔄 Reclassified invoice {invoice_id}: {len(updates)} line items updated")
+        logger.info(f"📚 Saved {len([u for u in updates if u['new_account'] != '01-6000-04'])} classification rule(s) for future learning")
+
+        return {
+            "invoice_id": invoice_id,
+            "updates": updates,
+            "message": f"{len(updates)} line item(s) reclassified based on your context",
+            "user_context": request.user_context,
+        }
+
+@app.delete("/invoices/{invoice_id}")
+async def delete_invoice(invoice_id: str):
+    """Delete an invoice (only if draft or pending)"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        
+        if invoice.status in ("posted", "paid"):
+            raise HTTPException(status_code=400, detail="Cannot delete posted or paid invoices")
+        
+        db.delete(invoice)
+        db.commit()
+        
+        if invoice_id in results_store:
+            del results_store[invoice_id]
+        
+        return {"message": f"Invoice {invoice_id} deleted"}
+
+
+# ─── Accounting Entries ───────────────────────────────────
+
+@app.get("/accounting/entries")
+async def list_journal_entries(
+    status: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+):
+    """List all journal entries"""
+    with get_db() as db:
+        query = db.query(JournalEntryDB).order_by(JournalEntryDB.created_at.desc())
+        
+        if status:
+            query = query.filter(JournalEntryDB.status == status)
+        
+        total = query.count()
+        entries = query.offset(offset).limit(limit).all()
+        
+        return {
+            "total": total,
+            "entries": [
+                {
+                    "entry_id": e.entry_id,
+                    "invoice_id": e.invoice_id,
+                    "entry_date": e.entry_date,
+                    "reference": e.reference,
+                    "description": e.description,
+                    "total_debit": e.total_debit,
+                    "total_credit": e.total_credit,
+                    "is_balanced": e.is_balanced,
+                    "status": e.status,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "lines": [
+                        {
+                            "account_code": l.account_code,
+                            "account_name": l.account_name,
+                            "description": l.description,
+                            "debit": l.debit,
+                            "credit": l.credit,
+                        }
+                        for l in e.lines
+                    ]
+                }
+                for e in entries
+            ],
+        }
+
+
+@app.post("/accounting/entries/{entry_id}/post")
+async def post_journal_entry(entry_id: str):
+    """Post a journal entry (make it permanent)"""
+    with get_db() as db:
+        entry = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Journal entry not found")
+        
+        if entry.status == "posted":
+            raise HTTPException(status_code=400, detail="Entry already posted")
+        
+        # Validate before posting
+        entry_dict = {
+            "lines": [
+                {"account_code": l.account_code, "debit": l.debit, "credit": l.credit}
+                for l in entry.lines
             ]
         }
-    except Exception as e:
-        logger.error(f"Failed to get audit trail: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve audit trail")
+        validation = validate_journal_entry(entry_dict)
+        if not validation["is_valid"]:
+            raise HTTPException(status_code=400, detail=f"Validation failed: {validation['issues']}")
+        
+        entry.status = "posted"
+        db.commit()
+        
+        return {"entry_id": entry_id, "status": "posted", "message": "Journal entry posted successfully"}
 
 
-@app.post("/reports/compliance")
-async def generate_compliance_report(
-    start_date: str,
-    end_date: str,
-    format: str = "json"
-):
-    """Generate compliance report for regulators"""
-    try:
-        # This would generate a comprehensive compliance report
-        report = {
-            "report_id": generate_analysis_id(),
-            "period": f"{start_date} to {end_date}",
-            "generated_at": datetime.utcnow().isoformat(),
-            "summary": {
-                "total_cases": 150,
-                "high_risk_cases": 25,
-                "critical_cases": 5,
-                "sars_filed": 3,
-                "false_positives": 8
-            },
-            "regulatory_compliance": {
-                "fatf_standards": "COMPLIANT",
-                "ofac_screening": "COMPLIANT",
-                "fincen_reporting": "COMPLIANT"
-            }
+@app.post("/accounting/entries/{entry_id}/reverse")
+async def reverse_journal_entry(entry_id: str):
+    """Create a reversing entry"""
+    with get_db() as db:
+        original = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id).first()
+        if not original:
+            raise HTTPException(status_code=404, detail="Journal entry not found")
+        
+        from src.invoice_engine import generate_entry_id
+        reversal_id = generate_entry_id()
+        
+        reversal = JournalEntryDB(
+            entry_id=reversal_id,
+            invoice_id=original.invoice_id,
+            entry_date=datetime.now().strftime("%Y-%m-%d"),
+            reference=f"REV-{original.reference}",
+            description=f"Reversal of {original.entry_id}: {original.description}",
+            total_debit=original.total_credit,
+            total_credit=original.total_debit,
+            is_balanced=True,
+            status="draft",
+            created_by="system",
+        )
+        db.add(reversal)
+        
+        for line in original.lines:
+            rev_line = JournalEntryLineDB(
+                entry_id=reversal_id,
+                account_code=line.account_code,
+                account_name=line.account_name,
+                description=f"Reversal: {line.description}",
+                debit=line.credit,  # Swap
+                credit=line.debit,  # Swap
+                cost_center=line.cost_center,
+                project_code=line.project_code,
+            )
+            db.add(rev_line)
+        
+        original.status = "reversed"
+        db.commit()
+        
+        return {
+            "original_entry_id": entry_id,
+            "reversal_entry_id": reversal_id,
+            "message": "Reversal entry created"
         }
+
+
+# ─── Chart of Accounts ───────────────────────────────────
+
+
+
+@app.get("/accounting/classification-rules")
+async def list_classification_rules():
+    """List all learned classification rules"""
+    with get_db() as db:
+        rules = db.query(ClassificationRule).order_by(
+            ClassificationRule.times_used.desc(),
+            ClassificationRule.updated_at.desc()
+        ).all()
+        return {
+            "total": len(rules),
+            "rules": [
+                {
+                    "id": r.id,
+                    "vendor_name": r.vendor_name,
+                    "description_pattern": r.description_pattern,
+                    "account_code": r.account_code,
+                    "account_name": r.account_name,
+                    "user_context": r.user_context,
+                    "source": r.source,
+                    "times_used": r.times_used,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                }
+                for r in rules
+            ]
+        }
+
+
+@app.delete("/accounting/classification-rules/{rule_id}")
+async def delete_classification_rule(rule_id: int):
+    """Delete a learned classification rule"""
+    with get_db() as db:
+        rule = db.query(ClassificationRule).filter(ClassificationRule.id == rule_id).first()
+        if not rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        db.delete(rule)
+        db.commit()
+        return {"message": f"Rule deleted: {rule.vendor_name} → {rule.account_code}"}
+
+@app.get("/accounting/chart-of-accounts")
+async def get_chart_of_accounts(category: Optional[str] = None):
+    """Get the chart of accounts"""
+    with get_db() as db:
+        query = db.query(ChartOfAccountsDB).filter(ChartOfAccountsDB.is_active == True)
+        if category:
+            query = query.filter(ChartOfAccountsDB.category == category)
+        accounts = query.order_by(ChartOfAccountsDB.code).all()
         
-        if format == "pdf":
-            # Would generate PDF report
-            return {"message": "PDF report generated", "download_url": "/reports/download/report.pdf"}
+        return {
+            "total": len(accounts),
+            "accounts": [
+                {
+                    "code": a.code,
+                    "name": a.name,
+                    "category": a.category,
+                    "parent_code": a.parent_code,
+                    "description": a.description,
+                }
+                for a in accounts
+            ]
+        }
+
+
+
+
+@app.get("/accounting/export/excel")
+async def export_journal_entries_excel(
+    status: Optional[str] = "posted",
+):
+    """Export journal entries to Excel. Defaults to posted entries only."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    import tempfile
+
+    with get_db() as db:
+        query = db.query(JournalEntryDB).order_by(JournalEntryDB.entry_date.asc(), JournalEntryDB.created_at.asc())
+        if status:
+            query = query.filter(JournalEntryDB.status == status)
+        entries = query.all()
+
+        if not entries:
+            raise HTTPException(status_code=404, detail="No journal entries found to export")
+
+        wb = openpyxl.Workbook()
+
+        # --- Sheet 1: Journal Entries Detail ---
+        ws = wb.active
+        ws.title = "Journal Entries"
+
+        # Styles
+        header_font = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="1B4332")
+        data_font = Font(name="Arial", size=10)
+        accent_font = Font(name="Arial", size=10, color="1B7A43")
+        debit_font = Font(name="Arial", size=10, color="C0392B")
+        credit_font = Font(name="Arial", size=10, color="27AE60")
+        total_font = Font(name="Arial", size=10, bold=True)
+        total_fill = PatternFill("solid", fgColor="F0F4F0")
+        border = Border(
+            bottom=Side(style="thin", color="D5D5D5")
+        )
+        currency_fmt = '#,##0.00'
+
+        # Title
+        ws.merge_cells("A1:G1")
+        ws["A1"] = "MC Golf - Journal Entries Export"
+        ws["A1"].font = Font(name="Arial", bold=True, size=14, color="1B4332")
+        ws["A2"] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        ws["A2"].font = Font(name="Arial", size=9, color="888888")
+        ws["A3"] = f"Filter: {status or 'All'} | Total entries: {len(entries)}"
+        ws["A3"].font = Font(name="Arial", size=9, color="888888")
+
+        # Headers
+        headers = ["Entry ID", "Date", "Vendor / Reference", "Account Code", "Account Name", "Description", "Debit", "Credit"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=5, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        row = 6
+        grand_debit = 0
+        grand_credit = 0
+
+        for entry in entries:
+            # Get vendor name from related invoice
+            vendor = ""
+            if entry.invoice:
+                vendor = entry.invoice.vendor_name or ""
+
+            entry_start_row = row
+            for line in entry.lines:
+                ws.cell(row=row, column=1, value=entry.entry_id).font = accent_font
+                ws.cell(row=row, column=2, value=entry.entry_date).font = data_font
+                ws.cell(row=row, column=3, value=vendor or entry.reference or "").font = data_font
+                ws.cell(row=row, column=4, value=line.account_code).font = Font(name="Consolas", size=10)
+                ws.cell(row=row, column=5, value=line.account_name).font = data_font
+                ws.cell(row=row, column=6, value=line.description or "").font = data_font
+
+                debit_cell = ws.cell(row=row, column=7, value=line.debit if line.debit > 0 else None)
+                debit_cell.font = debit_font
+                debit_cell.number_format = currency_fmt
+
+                credit_cell = ws.cell(row=row, column=8, value=line.credit if line.credit > 0 else None)
+                credit_cell.font = credit_font
+                credit_cell.number_format = currency_fmt
+
+                for c in range(1, 9):
+                    ws.cell(row=row, column=c).border = border
+
+                grand_debit += line.debit or 0
+                grand_credit += line.credit or 0
+                row += 1
+
+            # Entry subtotal row
+            ws.cell(row=row, column=6, value=f"Entry Total ({entry.entry_id})").font = total_font
+            ws.cell(row=row, column=6).alignment = Alignment(horizontal="right")
+            sub_debit = ws.cell(row=row, column=7, value=entry.total_debit)
+            sub_debit.font = total_font
+            sub_debit.number_format = currency_fmt
+            sub_debit.fill = total_fill
+            sub_credit = ws.cell(row=row, column=8, value=entry.total_credit)
+            sub_credit.font = total_font
+            sub_credit.number_format = currency_fmt
+            sub_credit.fill = total_fill
+            row += 1  # blank row separator
+
+        # Grand total
+        row += 1
+        ws.cell(row=row, column=6, value="GRAND TOTAL").font = Font(name="Arial", bold=True, size=11)
+        ws.cell(row=row, column=6).alignment = Alignment(horizontal="right")
+        gt_debit = ws.cell(row=row, column=7, value=grand_debit)
+        gt_debit.font = Font(name="Arial", bold=True, size=11, color="C0392B")
+        gt_debit.number_format = currency_fmt
+        gt_credit = ws.cell(row=row, column=8, value=grand_credit)
+        gt_credit.font = Font(name="Arial", bold=True, size=11, color="27AE60")
+        gt_credit.number_format = currency_fmt
+
+        # Column widths
+        widths = [22, 12, 25, 14, 25, 45, 15, 15]
+        for i, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+        ws.sheet_view.showGridLines = False
+        ws.freeze_panes = "A6"
+
+        # --- Sheet 2: Summary by Account ---
+        ws2 = wb.create_sheet("Summary by Account")
+        ws2.merge_cells("A1:E1")
+        ws2["A1"] = "Journal Entries Summary by Account"
+        ws2["A1"].font = Font(name="Arial", bold=True, size=14, color="1B4332")
+
+        summary_headers = ["Account Code", "Account Name", "Total Debit", "Total Credit", "Net"]
+        for col, h in enumerate(summary_headers, 1):
+            cell = ws2.cell(row=3, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        # Aggregate by account
+        account_totals = {}
+        for entry in entries:
+            for line in entry.lines:
+                key = (line.account_code or "", line.account_name or "")
+                if key not in account_totals:
+                    account_totals[key] = {"debit": 0, "credit": 0}
+                account_totals[key]["debit"] += line.debit or 0
+                account_totals[key]["credit"] += line.credit or 0
+
+        srow = 4
+        for (code, name), totals in sorted(account_totals.items()):
+            ws2.cell(row=srow, column=1, value=code).font = Font(name="Consolas", size=10)
+            ws2.cell(row=srow, column=2, value=name).font = data_font
+            d = ws2.cell(row=srow, column=3, value=totals["debit"])
+            d.font = debit_font
+            d.number_format = currency_fmt
+            c = ws2.cell(row=srow, column=4, value=totals["credit"])
+            c.font = credit_font
+            c.number_format = currency_fmt
+            net = ws2.cell(row=srow, column=5, value=totals["debit"] - totals["credit"])
+            net.font = data_font
+            net.number_format = currency_fmt
+            for col in range(1, 6):
+                ws2.cell(row=srow, column=col).border = border
+            srow += 1
+
+        ws2.column_dimensions["A"].width = 16
+        ws2.column_dimensions["B"].width = 30
+        ws2.column_dimensions["C"].width = 15
+        ws2.column_dimensions["D"].width = 15
+        ws2.column_dimensions["E"].width = 15
+        ws2.sheet_view.showGridLines = False
+        ws2.freeze_panes = "A4"
+
+        # Save to temp file
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", dir="temp_uploads")
+        wb.save(tmp.name)
+        tmp.close()
+
+        filename = f"MC_Golf_Journal_Entries_{status or 'all'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        return FileResponse(
+            tmp.name,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=filename
+        )
+
+@app.get("/accounting/suggest-account")
+async def suggest_account(description: str, type: str = "supplier"):
+    """AI-powered account code suggestion"""
+    code, name = suggest_account_code(description, type)
+    return {"account_code": code, "account_name": name, "description": description}
+
+
+# ─── Dashboard ────────────────────────────────────────────
+
+@app.get("/dashboard/stats")
+async def get_dashboard_stats():
+    """Get dashboard statistics"""
+    with get_db() as db:
+        total = db.query(Invoice).count()
+        pending = db.query(Invoice).filter(Invoice.status == "pending_review").count()
+        approved = db.query(Invoice).filter(Invoice.status == "approved").count()
+        posted = db.query(Invoice).filter(Invoice.status == "posted").count()
         
-        return report
+        # Totals by type
+        from sqlalchemy import func
+        payable = db.query(func.sum(Invoice.total_amount)).filter(
+            Invoice.invoice_type == "supplier",
+            Invoice.status.in_(["pending_review", "approved", "posted"])
+        ).scalar() or 0.0
         
-    except Exception as e:
-        logger.error(f"Failed to generate compliance report: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate report")
+        receivable = db.query(func.sum(Invoice.total_amount)).filter(
+            Invoice.invoice_type == "client",
+            Invoice.status.in_(["pending_review", "approved", "posted"])
+        ).scalar() or 0.0
+        
+        # Recent invoices
+        recent = db.query(Invoice).order_by(Invoice.created_at.desc()).limit(10).all()
+        
+        return {
+            "total_invoices": total,
+            "pending_review": pending,
+            "approved": approved,
+            "posted": posted,
+            "total_payable": round(payable, 2),
+            "total_receivable": round(receivable, 2),
+            "recent_invoices": [_invoice_to_dict(inv) for inv in recent],
+        }
 
 
-async def cleanup_file(file_path: Path):
-    """Background task to cleanup uploaded files"""
-    try:
-        if file_path.exists():
-            file_path.unlink()
-            logger.info(f"Cleaned up file: {file_path}")
-    except Exception as e:
-        logger.error(f"Failed to cleanup file {file_path}: {e}")
+# ─── Helper Functions ─────────────────────────────────────
+
+def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
+    """Convert Invoice ORM object to dict"""
+    return {
+        "invoice_id": invoice.invoice_id,
+        "invoice_type": invoice.invoice_type,
+        "status": invoice.status,
+        "vendor_name": invoice.vendor_name,
+        "invoice_number": invoice.invoice_number,
+        "invoice_date": invoice.invoice_date,
+        "due_date": invoice.due_date,
+        "currency": invoice.currency,
+        "subtotal": invoice.subtotal,
+        "tax_total": invoice.tax_total,
+        "total_amount": invoice.total_amount,
+        "project_code": invoice.project_code,
+        "cost_center": invoice.cost_center,
+        "confidence_score": invoice.confidence_score,
+        "created_at": invoice.created_at.isoformat() if invoice.created_at else None,
+        "updated_at": invoice.updated_at.isoformat() if invoice.updated_at else None,
+        "has_document": bool(invoice.source_file and Path(invoice.source_file).exists()),
+    }
 
 
-# Error handlers
-@app.exception_handler(404)
-async def not_found_handler(request, exc):
-    return JSONResponse(
-        status_code=404,
-        content={"detail": "Resource not found"}
-    )
-
-
-@app.exception_handler(500)
-async def internal_error_handler(request, exc):
-    logger.error(f"Internal server error: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"}
-    )
-
-
-if __name__ == "__main__":
-    import uvicorn
+def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str], project_code: Optional[str], cost_center: Optional[str]):
+    """Save processed invoice and its entries to the database"""
+    extracted = result.get("extracted_data", {})
+    invoice_id = result["invoice_id"]
     
-    # Run the application
-    uvicorn.run(
-        "src.api:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    with get_db() as db:
+        # Create invoice record
+        invoice = Invoice(
+            invoice_id=invoice_id,
+            invoice_type=invoice_type,
+            status=result.get("status", "pending_review"),
+            vendor_name=extracted.get("vendor_name") or "Unknown Vendor",
+            vendor_address=extracted.get("vendor_address"),
+            vendor_brn=extracted.get("vendor_brn"),
+            vendor_vat=extracted.get("vendor_vat"),
+            invoice_number=extracted.get("invoice_number") or "N/A",
+            invoice_date=extracted.get("invoice_date"),
+            due_date=extracted.get("due_date"),
+            purchase_order=extracted.get("purchase_order"),
+            currency=extracted.get("currency", "MUR"),
+            subtotal=extracted.get("subtotal", 0.0),
+            tax_total=extracted.get("tax_total", 0.0),
+            total_amount=extracted.get("total_amount", 0.0),
+            payment_terms=extracted.get("payment_terms"),
+            notes=extracted.get("notes"),
+            project_code=project_code,
+            cost_center=cost_center,
+            confidence_score=extracted.get("confidence_score", 0.0),
+            raw_text=extracted.get("raw_text", "")[:5000],
+            ai_analysis=json.dumps(extracted.get("ai_analysis")) if extracted.get("ai_analysis") else None,
+            source_file=file_path,
+        )
+        db.add(invoice)
+        
+        # Save line items
+        line_items = extracted.get("line_items", [])
+        for i, item in enumerate(line_items):
+            if isinstance(item, dict):
+                li = InvoiceLineItemDB(
+                    invoice_id=invoice_id,
+                    line_number=item.get("line_number", i + 1),
+                    description=item.get("description", ""),
+                    quantity=item.get("quantity", 1),
+                    unit_price=item.get("unit_price", 0),
+                    amount=item.get("amount", 0),
+                    tax_rate=item.get("tax_rate", 15.0),
+                    tax_amount=item.get("tax_amount", 0),
+                    account_code=item.get("account_code") or suggest_account_code(item.get("description", ""), invoice_type)[0],
+                    cost_center=cost_center,
+                    project_code=project_code,
+                )
+                db.add(li)
+        
+        # Save journal entries
+        for entry in result.get("suggested_entries", []):
+            je = JournalEntryDB(
+                entry_id=entry["entry_id"],
+                invoice_id=invoice_id,
+                entry_date=entry.get("entry_date"),
+                reference=entry.get("reference"),
+                description=entry.get("description"),
+                total_debit=entry.get("total_debit", 0),
+                total_credit=entry.get("total_credit", 0),
+                is_balanced=entry.get("is_balanced", True),
+                status="draft",
+                created_by=entry.get("created_by", "system"),
+            )
+            db.add(je)
+            
+            for line in entry.get("lines", []):
+                jel = JournalEntryLineDB(
+                    entry_id=entry["entry_id"],
+                    account_code=line.get("account_code"),
+                    account_name=line.get("account_name"),
+                    description=line.get("description"),
+                    debit=line.get("debit", 0),
+                    credit=line.get("credit", 0),
+                    cost_center=line.get("cost_center"),
+                    project_code=line.get("project_code"),
+                )
+                db.add(jel)
+        
+        db.commit()
+        logger.info(f"💾 Saved invoice {invoice_id} to database")

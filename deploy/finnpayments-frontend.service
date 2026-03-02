@@ -1,0 +1,14 @@
+[Unit]
+Description=FinnPayments Frontend (Vite)
+After=finnpayments-backend.service
+
+[Service]
+Type=simple
+User=administrator
+WorkingDirectory=/home/administrator/finnpayments/frontend
+ExecStart=/usr/bin/npm run dev
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,8 +1,8 @@
 #!/bin/bash
 case "$1" in
-  start)   sudo systemctl start finnverify-backend finnverify-frontend ;;
-  stop)    sudo systemctl stop finnverify-backend finnverify-frontend ;;
-  restart) sudo systemctl restart finnverify-backend finnverify-frontend ;;
-  status)  sudo systemctl status finnverify-backend finnverify-frontend ;;
+  start)   sudo systemctl start finnpayments-backend finnpayments-frontend ;;
+  stop)    sudo systemctl stop finnpayments-backend finnpayments-frontend ;;
+  restart) sudo systemctl restart finnpayments-backend finnpayments-frontend ;;
+  status)  sudo systemctl status finnpayments-backend finnpayments-frontend ;;
   *)       echo "Usage: $0 {start|stop|restart|status}" ;;
 esac

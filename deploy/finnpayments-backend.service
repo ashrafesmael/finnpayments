@@ -1,0 +1,16 @@
+[Unit]
+Description=FinnPayments Backend (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=administrator
+WorkingDirectory=/home/administrator/finnpayments
+ExecStart=/usr/bin/python3 run.py
+Restart=on-failure
+RestartSec=5
+Environment=GROQ_API_KEY=${GROQ_API_KEY}
+Environment=FINNPAYMENTS_PORT=8001
+
+[Install]
+WantedBy=multi-user.target
