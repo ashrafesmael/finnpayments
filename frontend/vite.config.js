@@ -3,7 +3,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3001,
-    allowedHosts: ['n8n.algo-dynamix.ai','screen.finnverify.com','aml.finnverify.com'],
+    allowedHosts: ['n8n.algo-dynamix.ai','screen.finnverify.com','aml.finnverify.com','payments.finnverify.com'],
     proxy: {
       '/api': {
         target: 'http://localhost:8001',

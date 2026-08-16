@@ -7,7 +7,7 @@ import {
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
-  getClassificationRules, deleteClassificationRule
+  getClassificationRules, deleteClassificationRule, resetAllData
 } from './services/api.js';
 
 /* ─── Icons (inline SVG) ────────────────────────────── */
@@ -28,6 +28,9 @@ const Icons = {
   TrendUp: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><polyline points="23,6 13.5,15.5 8.5,10.5 1,18"/><polyline points="17,6 23,6 23,12"/></svg>,
   Clock: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>,
   Alert: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+  Sun: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
+  Moon: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>,
+  Refresh: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><polyline points="23,4 23,10 17,10"/><polyline points="1,20 1,14 7,14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>,
 };
 
 /* ─── Helpers ────────────────────────────────────────── */
@@ -50,7 +53,7 @@ const Empty = ({ text }) => <div className="empty-state">{text || 'No data found
 /* ═══════════════════════════════════════════════════════
    SIDEBAR
    ═══════════════════════════════════════════════════════ */
-function Sidebar({ active, onNavigate, health }) {
+function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting }) {
   const items = [
     { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
     { id: 'upload', label: 'Upload Invoice', icon: Icons.Upload },
@@ -76,6 +79,16 @@ function Sidebar({ active, onNavigate, health }) {
           </button>
         ))}
       </nav>
+      <div className="sidebar-footer">
+        <button className="sidebar-footer-btn" onClick={onToggleTheme} title="Switch theme">
+          {theme === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
+          {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+        </button>
+        <button className="sidebar-footer-btn danger" onClick={onReset} disabled={resetting} title="Delete all invoices and journal entries">
+          <span className={resetting ? 'spinning' : ''} style={{ display: 'flex' }}><Icons.Refresh /></span>
+          {resetting ? 'Resetting…' : 'Reset Data'}
+        </button>
+      </div>
       <div className="sidebar-status">
         <div className={`status-dot ${health ? 'online' : 'offline'}`} />
         API {health ? 'Connected' : 'Offline'}
@@ -351,14 +364,14 @@ function UploadResult({ result, onNavigate, onReset }) {
                     <tr key={li}>
                       <td><span className="mono text-xs text-accent">{l.account_code}</span> <span className="text-muted text-xs">{l.account_name}</span></td>
                       <td className="text-xs">{l.description}</td>
-                      <td className="text-right debit">{l.debit > 0 ? fmtCurrency(l.debit) : ''}</td>
-                      <td className="text-right credit">{l.credit > 0 ? fmtCurrency(l.credit) : ''}</td>
+                      <td className="text-right debit">{l.debit > 0 ? fmtCurrency(l.debit, d.currency) : ''}</td>
+                      <td className="text-right credit">{l.credit > 0 ? fmtCurrency(l.credit, d.currency) : ''}</td>
                     </tr>
                   ))}
                   <tr className="je-totals-row">
                     <td colSpan={2} style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Totals</td>
-                    <td className="text-right debit">{fmtCurrency(entry.total_debit)}</td>
-                    <td className="text-right credit">{fmtCurrency(entry.total_credit)}</td>
+                    <td className="text-right debit">{fmtCurrency(entry.total_debit, d.currency)}</td>
+                    <td className="text-right credit">{fmtCurrency(entry.total_credit, d.currency)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -732,14 +745,14 @@ function JournalEntries() {
                 <tr key={i}>
                   <td><span className="mono text-xs text-accent">{l.account_code}</span> <span className="text-muted text-xs">{l.account_name}</span></td>
                   <td className="text-muted text-xs">{l.description}</td>
-                  <td className="text-right debit">{l.debit > 0 ? fmtCurrency(l.debit) : ''}</td>
-                  <td className="text-right credit">{l.credit > 0 ? fmtCurrency(l.credit) : ''}</td>
+                  <td className="text-right debit">{l.debit > 0 ? fmtCurrency(l.debit, entry.currency) : ''}</td>
+                  <td className="text-right credit">{l.credit > 0 ? fmtCurrency(l.credit, entry.currency) : ''}</td>
                 </tr>
               ))}
               <tr className="je-totals-row">
                 <td colSpan={2} style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Totals</td>
-                <td className="text-right debit">{fmtCurrency(entry.total_debit)}</td>
-                <td className="text-right credit">{fmtCurrency(entry.total_credit)}</td>
+                <td className="text-right debit">{fmtCurrency(entry.total_debit, entry.currency)}</td>
+                <td className="text-right credit">{fmtCurrency(entry.total_credit, entry.currency)}</td>
               </tr>
             </tbody>
           </table>
@@ -864,6 +877,13 @@ export default function App() {
   const [view, setView] = useState('dashboard');
   const [selectedId, setSelectedId] = useState(null);
   const [health, setHealth] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('fp-theme') || 'dark');
+  const [resetting, setResetting] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('fp-theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     checkHealth().then(() => setHealth(true)).catch(() => setHealth(false));
@@ -873,9 +893,29 @@ export default function App() {
 
   const nav = (v, id = null) => { setView(v); setSelectedId(id); window.scrollTo(0, 0); };
 
+  const handleReset = async () => {
+    if (!window.confirm('This will permanently delete ALL invoices, journal entries and their uploaded documents.\n\nChart of accounts and learned classification rules are kept.\n\nAre you sure?')) return;
+    setResetting(true);
+    try {
+      await resetAllData();
+      window.location.reload();
+    } catch (e) {
+      alert(`Reset failed: ${e.message}`);
+      setResetting(false);
+    }
+  };
+
   return (
     <div className="app-layout">
-      <Sidebar active={view} onNavigate={nav} health={health} />
+      <Sidebar
+        active={view}
+        onNavigate={nav}
+        health={health}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        onReset={handleReset}
+        resetting={resetting}
+      />
       <main className="main-content">
         {view === 'dashboard' && <Dashboard onNavigate={nav} />}
         {view === 'upload' && <InvoiceUpload onNavigate={nav} />}

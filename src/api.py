@@ -756,6 +756,58 @@ async def delete_invoice(invoice_id: str):
         return {"message": f"Invoice {invoice_id} deleted"}
 
 
+# ─── Admin / Reset ────────────────────────────────────────
+
+class ResetConfirmRequest(PydanticBaseModel):
+    confirm: bool = False
+
+
+@app.post("/admin/reset")
+async def reset_all_data(request: ResetConfirmRequest):
+    """Delete ALL invoices, line items and journal entries, plus their uploaded documents.
+    Chart of accounts and learned classification rules are preserved."""
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail='Confirmation required: pass {"confirm": true}')
+
+    with get_db() as db:
+        invoice_count = db.query(Invoice).count()
+        entry_count = db.query(JournalEntryDB).count()
+        source_files = [row[0] for row in db.query(Invoice.source_file).all()]
+
+        # Bulk deletes bypass ORM cascades, so delete children first
+        db.query(JournalEntryLineDB).delete(synchronize_session=False)
+        db.query(JournalEntryDB).delete(synchronize_session=False)
+        db.query(InvoiceLineItemDB).delete(synchronize_session=False)
+        db.query(Invoice).delete(synchronize_session=False)
+        db.commit()
+
+    results_store.clear()
+
+    # Remove uploaded documents that belonged to the deleted invoices
+    safe_dirs = {upload_directory.resolve(), (Path.cwd() / "temp_uploads").resolve()}
+    files_removed = 0
+    for rel_path in source_files:
+        if not rel_path:
+            continue
+        p = Path(rel_path)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        try:
+            if p.resolve().parent in safe_dirs and p.exists():
+                p.unlink()
+                files_removed += 1
+        except OSError:
+            logger.warning(f"Could not remove uploaded file: {p}")
+
+    logger.info(f"Reset complete: {invoice_count} invoices, {entry_count} journal entries, {files_removed} files removed")
+    return {
+        "message": "All invoice records and journal entries deleted",
+        "invoices_deleted": invoice_count,
+        "journal_entries_deleted": entry_count,
+        "files_removed": files_removed,
+    }
+
+
 # ─── Accounting Entries ───────────────────────────────────
 
 @app.get("/accounting/entries")
@@ -787,6 +839,7 @@ async def list_journal_entries(
                     "total_credit": e.total_credit,
                     "is_balanced": e.is_balanced,
                     "status": e.status,
+                    "currency": e.invoice.currency if e.invoice else "MUR",
                     "created_at": e.created_at.isoformat() if e.created_at else None,
                     "lines": [
                         {

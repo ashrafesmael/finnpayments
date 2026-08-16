@@ -230,6 +230,27 @@ def suggest_account_code(description, invoice_type="supplier", vendor_name=None)
     return defaults["default_expense"] if invoice_type in ("supplier", "credit_note") else defaults["default_revenue"]
 
 
+
+def _amounts_are_gross(line_items, subtotal, total_amount, tax_total):
+    """Detect if line item amounts include VAT (gross) or exclude VAT (net)."""
+    if not line_items:
+        return False
+    line_sum = sum(
+        (item.get("amount", 0) if isinstance(item, dict) else getattr(item, "amount", 0))
+        for item in line_items
+    )
+    if line_sum <= 0:
+        return False
+    # If line sum is close to gross total → amounts are gross
+    if abs(line_sum - total_amount) < 1.0:
+        return True
+    # If line sum is close to subtotal (net) → amounts are net
+    if abs(line_sum - subtotal) < 1.0:
+        return False
+    # Default: assume net (most common case)
+    return False
+
+
 def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier"):
     from src.invoice_engine import generate_entry_id
     entries = []
@@ -250,6 +271,10 @@ def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier
     is_credit_note = invoice_type == "credit_note"
     if invoice_type in ("supplier", "credit_note"):
         if line_items:
+            amounts_gross = _amounts_are_gross(line_items, subtotal, total_amount, tax_total)
+            # First pass: aggregate amounts per account code (net positives and negatives)
+            from collections import OrderedDict
+            account_buckets = OrderedDict()
             for item in line_items:
                 desc = item.get("description", "") if isinstance(item, dict) else getattr(item, "description", "")
                 amount = item.get("amount", 0) if isinstance(item, dict) else getattr(item, "amount", 0)
@@ -259,11 +284,32 @@ def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier
                     acct_code, acct_name = suggest_account_code(desc, invoice_type, vendor_name=vendor_name)
                 else:
                     acct_name = lookup_account_name(acct_code)
-                net_amount = amount - item_tax if item_tax else amount
-                if is_credit_note:
-                    entry_lines.append({"account_code": acct_code, "account_name": acct_name, "description": f"Credit Note - {desc}", "debit": 0.0, "credit": round(abs(net_amount), 2), "cost_center": cost_center, "project_code": project_code})
+                net_amount = (amount - item_tax) if (item_tax and amounts_gross) else amount
+
+                if acct_code not in account_buckets:
+                    account_buckets[acct_code] = {"account_name": acct_name, "amount": 0.0, "descriptions": []}
+                account_buckets[acct_code]["amount"] += net_amount
+                if net_amount != 0:
+                    account_buckets[acct_code]["descriptions"].append(desc)
+
+            # Second pass: emit one entry line per account (net of any discounts)
+            for acct_code, bucket in account_buckets.items():
+                amt = bucket["amount"]
+                if amt == 0:
+                    continue
+                # Build description: single line if one item, summary if multiple
+                if len(bucket["descriptions"]) == 1:
+                    line_desc = bucket["descriptions"][0]
                 else:
-                    entry_lines.append({"account_code": acct_code, "account_name": acct_name, "description": desc, "debit": round(abs(net_amount), 2), "credit": 0.0, "cost_center": cost_center, "project_code": project_code})
+                    line_desc = f"{bucket['descriptions'][0]} (and {len(bucket['descriptions']) - 1} more, net of discounts)"
+
+                if is_credit_note:
+                    entry_lines.append({"account_code": acct_code, "account_name": bucket["account_name"], "description": f"Credit Note - {line_desc}", "debit": 0.0, "credit": round(abs(amt), 2), "cost_center": cost_center, "project_code": project_code})
+                else:
+                    if amt < 0:
+                        entry_lines.append({"account_code": acct_code, "account_name": bucket["account_name"], "description": line_desc, "debit": 0.0, "credit": round(abs(amt), 2), "cost_center": cost_center, "project_code": project_code})
+                    else:
+                        entry_lines.append({"account_code": acct_code, "account_name": bucket["account_name"], "description": line_desc, "debit": round(amt, 2), "credit": 0.0, "cost_center": cost_center, "project_code": project_code})
         else:
             search_text = f"{vendor_name} {invoice_data.get('notes', '')} {invoice_data.get('raw_text', '')[:200]}"
             acct_code, acct_name = suggest_account_code(search_text, invoice_type, vendor_name=vendor_name)
@@ -289,12 +335,13 @@ def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier
         ar_code, ar_name = mapping["receivable"]
         entry_lines.append({"account_code": ar_code, "account_name": ar_name, "description": f"Receivable from {vendor_name} - Inv {invoice_number}", "debit": round(abs(total_amount), 2), "credit": 0.0})
         if line_items:
+            amounts_gross = _amounts_are_gross(line_items, subtotal, total_amount, tax_total)
             for item in line_items:
                 desc = item.get("description", "") if isinstance(item, dict) else getattr(item, "description", "")
                 amount = item.get("amount", 0) if isinstance(item, dict) else getattr(item, "amount", 0)
                 item_tax = item.get("tax_amount", 0) if isinstance(item, dict) else getattr(item, "tax_amount", 0)
                 acct_code, acct_name = suggest_account_code(desc, "client")
-                net_amount = amount - item_tax if item_tax else amount
+                net_amount = (amount - item_tax) if (item_tax and amounts_gross) else amount
                 entry_lines.append({"account_code": acct_code, "account_name": acct_name, "description": desc, "debit": 0.0, "credit": round(abs(net_amount), 2), "cost_center": cost_center, "project_code": project_code})
         else:
             acct_code, acct_name = mapping["default_revenue"]

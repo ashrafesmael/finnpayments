@@ -62,6 +62,10 @@ export const suggestAccount = (description, type = 'supplier') =>
 
 export const checkHealth = () => apiRequest('/health');
 
+// ─── Admin ───────────────────────────────────────────────
+export const resetAllData = () =>
+  apiRequest('/admin/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+
 // ─── Export ──────────────────────────────────────────────
 export const exportJournalEntriesExcel = async (status = 'posted') => {
   const API_BASE2 = import.meta.env.VITE_API_URL || 'http://localhost:8001';
