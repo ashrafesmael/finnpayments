@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 export default defineConfig({
   server: {
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     port: 3001,
     allowedHosts: ['n8n.algo-dynamix.ai','screen.finnverify.com','aml.finnverify.com','payments.finnverify.com'],
     proxy: {

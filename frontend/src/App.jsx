@@ -110,10 +110,12 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
           {theme === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
           {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
-        <button className="sidebar-footer-btn danger" onClick={onReset} disabled={resetting} title="Delete all invoices and journal entries for the active company">
-          <span className={resetting ? 'spinning' : ''} style={{ display: 'flex' }}><Icons.Refresh /></span>
-          {resetting ? 'Resetting…' : 'Reset Data'}
-        </button>
+        {isAdmin && (
+          <button className="sidebar-footer-btn danger" onClick={onReset} disabled={resetting} title="Delete all invoices and journal entries for the active company">
+            <span className={resetting ? 'spinning' : ''} style={{ display: 'flex' }}><Icons.Refresh /></span>
+            {resetting ? 'Resetting…' : 'Reset Data'}
+          </button>
+        )}
       </div>
       <div className="sidebar-status">
         <div className={`status-dot ${health ? 'online' : 'offline'}`} />

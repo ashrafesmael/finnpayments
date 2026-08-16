@@ -793,9 +793,16 @@ class ResetConfirmRequest(PydanticBaseModel):
 
 
 @app.post("/admin/reset")
-async def reset_all_data(request: ResetConfirmRequest, company: dict = Depends(get_current_company)):
+async def reset_all_data(
+    request: ResetConfirmRequest,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
     """Delete ALL invoices, line items and journal entries for the current company, plus their uploaded documents.
-    Chart of accounts and learned classification rules are preserved."""
+    Chart of accounts and learned classification rules are preserved.
+    Admin only."""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required to reset data")
     if not request.confirm:
         raise HTTPException(status_code=400, detail='Confirmation required: pass {"confirm": true}')
 
