@@ -1,18 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import {
+  getCompanies, createCompany, deleteCompany,
+  getCompanyUsers, assignUserToCompany, removeUserFromCompany,
+} from '../services/api';
 import './AdminPanel.css';
 
 const AdminPanel = () => {
   const [users, setUsers] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState(null);
-  const { token, user: currentUser } = useAuth();
+  const { token, user: currentUser, refreshUser } = useAuth();
 
   const API_URL = import.meta.env.VITE_API_URL || '';
 
+  // Company form
+  const [companyForm, setCompanyForm] = useState({ code: '', name: '', currency: 'MUR' });
+  const [companyUsers, setCompanyUsers] = useState({});
+  const [expandedCompany, setExpandedCompany] = useState(null);
+  const [assignEmail, setAssignEmail] = useState({});
+
   useEffect(() => {
     fetchUsers();
+    fetchCompanies();
   }, []);
 
   const fetchUsers = async () => {
@@ -30,6 +42,58 @@ const AdminPanel = () => {
       setError('Error fetching users: ' + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchCompanies = async () => {
+    try {
+      const data = await getCompanies();
+      setCompanies(data);
+    } catch (err) {
+      setError('Error fetching companies: ' + err.message);
+    }
+  };
+
+  const fetchCompanyUsers = async (companyId) => {
+    try {
+      const data = await getCompanyUsers(companyId);
+      setCompanyUsers(prev => ({ ...prev, [companyId]: data }));
+    } catch (err) {
+      setError('Error fetching company users: ' + err.message);
+    }
+  };
+
+  const handleCreateCompany = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!companyForm.code || !companyForm.name) {
+      setError('Company code and name are required');
+      return;
+    }
+    setActionLoading('create-company');
+    try {
+      await createCompany(companyForm.code, companyForm.name, companyForm.currency);
+      setCompanyForm({ code: '', name: '', currency: 'MUR' });
+      await fetchCompanies();
+      await refreshUser();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDeleteCompany = async (companyId) => {
+    if (!window.confirm('Delete this company? This will NOT delete the invoices/entries (they will be orphaned).')) return;
+    setActionLoading('delete-' + companyId);
+    try {
+      await deleteCompany(companyId);
+      await fetchCompanies();
+      await refreshUser();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -75,7 +139,6 @@ const AdminPanel = () => {
 
   const handleDelete = async (userId) => {
     if (!window.confirm('Are you sure you want to delete this user?')) return;
-    
     setActionLoading(userId);
     try {
       const response = await fetch(API_URL + '/auth/admin/users/' + userId, {
@@ -116,6 +179,51 @@ const AdminPanel = () => {
     }
   };
 
+  const handleAssignUser = async (companyId) => {
+    const email = assignEmail[companyId];
+    if (!email) return;
+    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    if (!user) {
+      setError('User not found: ' + email);
+      return;
+    }
+    setActionLoading('assign-' + companyId);
+    try {
+      await assignUserToCompany(companyId, user.id);
+      setAssignEmail(prev => ({ ...prev, [companyId]: '' }));
+      await fetchCompanyUsers(companyId);
+      await refreshUser();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRemoveUserFromCompany = async (companyId, userId) => {
+    setActionLoading('remove-' + companyId + '-' + userId);
+    try {
+      await removeUserFromCompany(companyId, userId);
+      await fetchCompanyUsers(companyId);
+      await refreshUser();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const toggleCompanyExpand = (companyId) => {
+    if (expandedCompany === companyId) {
+      setExpandedCompany(null);
+    } else {
+      setExpandedCompany(companyId);
+      if (!companyUsers[companyId]) {
+        fetchCompanyUsers(companyId);
+      }
+    }
+  };
+
   const getStatusBadge = (status) => {
     const classes = {
       pending: 'status-badge pending',
@@ -134,15 +242,142 @@ const AdminPanel = () => {
   const rejectedUsers = users.filter(u => u.status === 'rejected');
 
   if (loading) {
-    return <div className="admin-loading">Loading users...</div>;
+    return <div className="admin-loading">Loading...</div>;
   }
 
   return (
     <div className="admin-panel">
-      <h1>User Management</h1>
-      
-      {error && <div className="admin-error">{error}</div>}
+      <h1>Administration</h1>
 
+      {error && <div className="admin-error" onClick={() => setError('')}>{error}</div>}
+
+      {/* ─── Companies Section ─── */}
+      <section className="user-section">
+        <h2>Companies ({companies.length})</h2>
+
+        <form onSubmit={handleCreateCompany} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <input
+            className="input"
+            style={{ width: 100 }}
+            placeholder="Code (e.g. MCG)"
+            value={companyForm.code}
+            onChange={(e) => setCompanyForm({ ...companyForm, code: e.target.value.toUpperCase() })}
+            maxLength={10}
+          />
+          <input
+            className="input"
+            style={{ flex: 1 }}
+            placeholder="Company Name"
+            value={companyForm.name}
+            onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
+          />
+          <select
+            className="input"
+            style={{ width: 100 }}
+            value={companyForm.currency}
+            onChange={(e) => setCompanyForm({ ...companyForm, currency: e.target.value })}
+          >
+            <option value="MUR">MUR</option>
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+            <option value="ZAR">ZAR</option>
+          </select>
+          <button type="submit" className="btn btn-primary" disabled={actionLoading === 'create-company'}>
+            {actionLoading === 'create-company' ? 'Creating...' : 'Add Company'}
+          </button>
+        </form>
+
+        <table className="users-table">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Name</th>
+              <th>Currency</th>
+              <th>Users</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {companies.map(c => (
+              <React.Fragment key={c.id}>
+                <tr>
+                  <td className="mono text-sm" style={{ fontWeight: 600, color: 'var(--accent)' }}>{c.code}</td>
+                  <td style={{ fontWeight: 500 }}>{c.name}</td>
+                  <td className="text-muted text-sm">{c.currency}</td>
+                  <td className="text-sm">{c.user_count || 0}</td>
+                  <td className="action-buttons">
+                    <button className="btn-role" onClick={() => toggleCompanyExpand(c.id)} title="Manage users">
+                      {expandedCompany === c.id ? '▲' : '▼'}
+                    </button>
+                    <button
+                      className="btn-delete"
+                      onClick={() => handleDeleteCompany(c.id)}
+                      disabled={actionLoading === 'delete-' + c.id}
+                      title="Delete company"
+                    >×</button>
+                  </td>
+                </tr>
+                {expandedCompany === c.id && (
+                  <tr>
+                    <td colSpan={5} style={{ background: 'var(--bg-surface-2)', padding: 16 }}>
+                      <div style={{ marginBottom: 12, fontWeight: 500 }}>Users assigned to {c.name}</div>
+                      <table className="users-table" style={{ marginBottom: 12 }}>
+                        <thead>
+                          <tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                          {(companyUsers[c.id] || []).map(u => (
+                            <tr key={u.id}>
+                              <td>{u.full_name}</td>
+                              <td>{u.email}</td>
+                              <td>{getRoleBadge(u.role)}</td>
+                              <td>
+                                {u.id !== currentUser?.id && (
+                                  <button
+                                    className="btn-delete"
+                                    onClick={() => handleRemoveUserFromCompany(c.id, u.id)}
+                                    disabled={actionLoading === 'remove-' + c.id + '-' + u.id}
+                                  >×</button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                          {(companyUsers[c.id] || []).length === 0 && (
+                            <tr><td colSpan={4} className="text-muted">No users assigned</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          className="input"
+                          style={{ flex: 1 }}
+                          placeholder="Enter user email to assign..."
+                          value={assignEmail[c.id] || ''}
+                          onChange={(e) => setAssignEmail(prev => ({ ...prev, [c.id]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleAssignUser(c.id); }}
+                        />
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => handleAssignUser(c.id)}
+                          disabled={actionLoading === 'assign-' + c.id}
+                        >
+                          {actionLoading === 'assign-' + c.id ? 'Assigning...' : 'Assign User'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
+            {companies.length === 0 && (
+              <tr><td colSpan={5} className="text-muted">No companies yet</td></tr>
+            )}
+          </tbody>
+        </table>
+      </section>
+
+      {/* ─── Pending Users ─── */}
       {pendingUsers.length > 0 && (
         <section className="user-section pending-section">
           <h2>Pending Approval ({pendingUsers.length})</h2>
@@ -155,18 +390,10 @@ const AdminPanel = () => {
                   <p className="user-date">Registered: {new Date(user.created_at).toLocaleDateString()}</p>
                 </div>
                 <div className="user-actions">
-                  <button
-                    className="btn-approve"
-                    onClick={() => handleApprove(user.id)}
-                    disabled={actionLoading === user.id}
-                  >
+                  <button className="btn-approve" onClick={() => handleApprove(user.id)} disabled={actionLoading === user.id}>
                     {actionLoading === user.id ? '...' : 'Approve'}
                   </button>
-                  <button
-                    className="btn-reject"
-                    onClick={() => handleReject(user.id)}
-                    disabled={actionLoading === user.id}
-                  >
+                  <button className="btn-reject" onClick={() => handleReject(user.id)} disabled={actionLoading === user.id}>
                     {actionLoading === user.id ? '...' : 'Reject'}
                   </button>
                 </div>
@@ -176,6 +403,7 @@ const AdminPanel = () => {
         </section>
       )}
 
+      {/* ─── Active Users ─── */}
       <section className="user-section">
         <h2>Active Users ({activeUsers.length})</h2>
         <table className="users-table">
@@ -185,7 +413,7 @@ const AdminPanel = () => {
               <th>Email</th>
               <th>Role</th>
               <th>Status</th>
-              <th>Approved</th>
+              <th>Companies</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -196,7 +424,9 @@ const AdminPanel = () => {
                 <td>{user.email}</td>
                 <td>{getRoleBadge(user.role)}</td>
                 <td>{getStatusBadge(user.status)}</td>
-                <td>{user.approved_at ? new Date(user.approved_at).toLocaleDateString() : '-'}</td>
+                <td className="text-sm text-muted">
+                  {(user.companies || []).map(c => c.code).join(', ') || '-'}
+                </td>
                 <td className="action-buttons">
                   {user.id !== currentUser?.id && (
                     <>
@@ -212,9 +442,7 @@ const AdminPanel = () => {
                         className="btn-delete"
                         onClick={() => handleDelete(user.id)}
                         disabled={actionLoading === user.id}
-                      >
-                        ×
-                      </button>
+                      >×</button>
                     </>
                   )}
                   {user.id === currentUser?.id && <span className="you-badge">You</span>}
@@ -230,12 +458,7 @@ const AdminPanel = () => {
           <h2>Rejected Users ({rejectedUsers.length})</h2>
           <table className="users-table">
             <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Rejected</th>
-                <th>Actions</th>
-              </tr>
+              <tr><th>Name</th><th>Email</th><th>Rejected</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {rejectedUsers.map(user => (
@@ -244,20 +467,8 @@ const AdminPanel = () => {
                   <td>{user.email}</td>
                   <td>{user.approved_at ? new Date(user.approved_at).toLocaleDateString() : '-'}</td>
                   <td className="action-buttons">
-                    <button
-                      className="btn-approve"
-                      onClick={() => handleApprove(user.id)}
-                      disabled={actionLoading === user.id}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      className="btn-delete"
-                      onClick={() => handleDelete(user.id)}
-                      disabled={actionLoading === user.id}
-                    >
-                      ×
-                    </button>
+                    <button className="btn-approve" onClick={() => handleApprove(user.id)} disabled={actionLoading === user.id}>Approve</button>
+                    <button className="btn-delete" onClick={() => handleDelete(user.id)} disabled={actionLoading === user.id}>×</button>
                   </td>
                 </tr>
               ))}

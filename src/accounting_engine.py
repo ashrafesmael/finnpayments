@@ -147,7 +147,7 @@ def lookup_account_name(account_code):
     return account_code
 
 
-def check_learned_rules(vendor_name, description):
+def check_learned_rules(vendor_name, description, company_id=None):
     """Check classification_rules table for a matching vendor/description rule."""
     try:
         from src.database import SessionLocal, ClassificationRule
@@ -157,9 +157,12 @@ def check_learned_rules(vendor_name, description):
 
         # Priority 1: Exact vendor name match
         if vendor_lower:
-            rules = db.query(ClassificationRule).filter(
+            query = db.query(ClassificationRule).filter(
                 ClassificationRule.vendor_name.isnot(None)
-            ).all()
+            )
+            if company_id:
+                query = query.filter(ClassificationRule.company_id == company_id)
+            rules = query.all()
             for rule in rules:
                 if rule.vendor_name and rule.vendor_name.lower().strip() == vendor_lower:
                     # Increment usage counter
@@ -171,9 +174,12 @@ def check_learned_rules(vendor_name, description):
 
         # Priority 2: Description pattern match
         if desc_lower:
-            rules = db.query(ClassificationRule).filter(
+            query = db.query(ClassificationRule).filter(
                 ClassificationRule.description_pattern.isnot(None)
-            ).all()
+            )
+            if company_id:
+                query = query.filter(ClassificationRule.company_id == company_id)
+            rules = query.all()
             for rule in rules:
                 if rule.description_pattern and rule.description_pattern.lower() in desc_lower:
                     rule.times_used = (rule.times_used or 0) + 1
@@ -188,12 +194,15 @@ def check_learned_rules(vendor_name, description):
     return None
 
 
-def get_learned_rules_for_prompt():
+def get_learned_rules_for_prompt(company_id=None):
     """Get all learned rules formatted for inclusion in LLM prompt."""
     try:
         from src.database import SessionLocal, ClassificationRule
         db = SessionLocal()
-        rules = db.query(ClassificationRule).order_by(ClassificationRule.times_used.desc()).limit(50).all()
+        query = db.query(ClassificationRule)
+        if company_id:
+            query = query.filter(ClassificationRule.company_id == company_id)
+        rules = query.order_by(ClassificationRule.times_used.desc()).limit(50).all()
         db.close()
         if not rules:
             return ""
@@ -206,9 +215,9 @@ def get_learned_rules_for_prompt():
         return ""
 
 
-def suggest_account_code(description, invoice_type="supplier", vendor_name=None):
+def suggest_account_code(description, invoice_type="supplier", vendor_name=None, company_id=None):
     # Priority 1: Check learned classification rules
-    learned = check_learned_rules(vendor_name, description)
+    learned = check_learned_rules(vendor_name, description, company_id=company_id)
     if learned:
         return learned
 
@@ -222,7 +231,7 @@ def suggest_account_code(description, invoice_type="supplier", vendor_name=None)
 
     # Priority 3: Check learned rules by vendor alone (if description didn't match)
     if vendor_name:
-        learned_vendor = check_learned_rules(vendor_name, "")
+        learned_vendor = check_learned_rules(vendor_name, "", company_id=company_id)
         if learned_vendor:
             return learned_vendor
 
@@ -251,7 +260,7 @@ def _amounts_are_gross(line_items, subtotal, total_amount, tax_total):
     return False
 
 
-def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier"):
+def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier", company_id=None):
     from src.invoice_engine import generate_entry_id
     entries = []
     mapping = ACCOUNT_MAPPINGS.get(invoice_type, ACCOUNT_MAPPINGS["supplier"])
@@ -281,7 +290,7 @@ def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier
                 item_tax = item.get("tax_amount", 0) if isinstance(item, dict) else getattr(item, "tax_amount", 0)
                 acct_code = item.get("account_code") if isinstance(item, dict) else getattr(item, "account_code", None)
                 if not acct_code:
-                    acct_code, acct_name = suggest_account_code(desc, invoice_type, vendor_name=vendor_name)
+                    acct_code, acct_name = suggest_account_code(desc, invoice_type, vendor_name=vendor_name, company_id=company_id)
                 else:
                     acct_name = lookup_account_name(acct_code)
                 net_amount = (amount - item_tax) if (item_tax and amounts_gross) else amount
@@ -312,7 +321,7 @@ def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier
                         entry_lines.append({"account_code": acct_code, "account_name": bucket["account_name"], "description": line_desc, "debit": round(amt, 2), "credit": 0.0, "cost_center": cost_center, "project_code": project_code})
         else:
             search_text = f"{vendor_name} {invoice_data.get('notes', '')} {invoice_data.get('raw_text', '')[:200]}"
-            acct_code, acct_name = suggest_account_code(search_text, invoice_type, vendor_name=vendor_name)
+            acct_code, acct_name = suggest_account_code(search_text, invoice_type, vendor_name=vendor_name, company_id=company_id)
             ai_acct = invoice_data.get("suggested_account_code")
             if ai_acct:
                 acct_code = ai_acct
@@ -340,7 +349,7 @@ def generate_accounting_entries(invoice_id, invoice_data, invoice_type="supplier
                 desc = item.get("description", "") if isinstance(item, dict) else getattr(item, "description", "")
                 amount = item.get("amount", 0) if isinstance(item, dict) else getattr(item, "amount", 0)
                 item_tax = item.get("tax_amount", 0) if isinstance(item, dict) else getattr(item, "tax_amount", 0)
-                acct_code, acct_name = suggest_account_code(desc, "client")
+                acct_code, acct_name = suggest_account_code(desc, "client", company_id=company_id)
                 net_amount = (amount - item_tax) if (item_tax and amounts_gross) else amount
                 entry_lines.append({"account_code": acct_code, "account_name": acct_name, "description": desc, "debit": 0.0, "credit": round(abs(net_amount), 2), "cost_center": cost_center, "project_code": project_code})
         else:

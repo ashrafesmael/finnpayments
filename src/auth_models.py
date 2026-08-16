@@ -33,6 +33,13 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class CompanyResponse(BaseModel):
+    id: str
+    code: str
+    name: str
+    currency: str = "MUR"
+    created_at: str
+
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -42,6 +49,7 @@ class UserResponse(BaseModel):
     created_at: str
     approved_by: Optional[str] = None
     approved_at: Optional[str] = None
+    companies: List[CompanyResponse] = []
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -96,11 +104,40 @@ class AuthDatabase:
             )
         ''')
         
+        # Companies table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS companies (
+                id TEXT PRIMARY KEY,
+                code TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                currency TEXT DEFAULT 'MUR',
+                created_at TEXT NOT NULL
+            )
+        ''')
+        
+        # User-Company mapping (many-to-many)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_companies (
+                user_id TEXT NOT NULL,
+                company_id TEXT NOT NULL,
+                assigned_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, company_id),
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (company_id) REFERENCES companies(id)
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         
+        # Run migrations for existing databases
+        self._migrate_schema()
+        
         # Create default admin if not exists
         self._create_default_admin()
+        
+        # Create default company if none exists
+        self._create_default_company()
     
     def _hash_password(self, password: str) -> str:
         """Hash password with salt"""
@@ -133,6 +170,187 @@ class AuthDatabase:
             logger.info(f"✅ Default admin account created: admin@montchoisy.com")
         
         conn.close()
+    
+    def _migrate_schema(self):
+        """Add missing columns to existing tables (SQLite ALTER TABLE)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        def column_exists(table, column):
+            cursor.execute(f"PRAGMA table_info({table})")
+            return any(row[1] == column for row in cursor.fetchall())
+        
+        # No new columns needed on users/sessions yet — companies/user_companies
+        # are created via CREATE TABLE IF NOT EXISTS above.
+        conn.commit()
+        conn.close()
+    
+    def _create_default_company(self):
+        """Create a default company if none exists and assign admin to it."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM companies")
+        if cursor.fetchone()[0] == 0:
+            company_id = str(uuid.uuid4())
+            cursor.execute('''
+                INSERT INTO companies (id, code, name, currency, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                company_id,
+                'MCG',
+                'Mont Choisy Golf',
+                'MUR',
+                datetime.utcnow().isoformat()
+            ))
+            conn.commit()
+            logger.info(f"✅ Default company created: MCG - Mont Choisy Golf")
+        
+        # Ensure admin has access to all companies
+        cursor.execute("SELECT id FROM users WHERE role = 'admin'")
+        for row in cursor.fetchall():
+            admin_id = row[0]
+            cursor.execute('''
+                INSERT OR IGNORE INTO user_companies (user_id, company_id, assigned_at)
+                SELECT ?, c.id, ? FROM companies c
+            ''', (admin_id, datetime.utcnow().isoformat()))
+        
+        # Also assign existing approved non-admin users to the default company
+        cursor.execute("SELECT id FROM users WHERE role != 'admin' AND status = 'approved'")
+        for row in cursor.fetchall():
+            user_id = row[0]
+            cursor.execute('''
+                INSERT OR IGNORE INTO user_companies (user_id, company_id, assigned_at)
+                SELECT ?, c.id, ? FROM companies c
+            ''', (user_id, datetime.utcnow().isoformat()))
+        
+        conn.commit()
+        conn.close()
+    
+    # ─── Company methods ──────────────────────────────────
+    
+    def create_company(self, code: str, name: str, currency: str = 'MUR') -> Optional[dict]:
+        """Create a new company."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM companies WHERE code = ?", (code.upper(),))
+        if cursor.fetchone():
+            conn.close()
+            return None
+        company_id = str(uuid.uuid4())
+        cursor.execute('''
+            INSERT INTO companies (id, code, name, currency, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (company_id, code.upper(), name, currency, datetime.utcnow().isoformat()))
+        conn.commit()
+        company = dict(cursor.execute(
+            "SELECT * FROM companies WHERE id = ?", (company_id,)
+        ).fetchone())
+        conn.close()
+        logger.info(f"✅ Company created: {code} - {name}")
+        return company
+    
+    def get_companies(self) -> List[dict]:
+        """Get all companies."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM companies ORDER BY name")
+        companies = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return companies
+    
+    def get_company_by_id(self, company_id: str) -> Optional[dict]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM companies WHERE id = ?", (company_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def get_user_companies(self, user_id: str) -> List[dict]:
+        """Get companies a user has access to. Admins see all companies."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row and row[0] == 'admin':
+            cursor.execute("SELECT * FROM companies ORDER BY name")
+        else:
+            cursor.execute('''
+                SELECT c.* FROM companies c
+                JOIN user_companies uc ON c.id = uc.company_id
+                WHERE uc.user_id = ?
+                ORDER BY c.name
+            ''', (user_id,))
+        companies = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return companies
+    
+    def assign_user_to_company(self, user_id: str, company_id: str) -> bool:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR IGNORE INTO user_companies (user_id, company_id, assigned_at)
+            VALUES (?, ?, ?)
+        ''', (user_id, company_id, datetime.utcnow().isoformat()))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def remove_user_from_company(self, user_id: str, company_id: str) -> bool:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            DELETE FROM user_companies WHERE user_id = ? AND company_id = ?
+        ''', (user_id, company_id))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def user_has_company_access(self, user_id: str, company_id: str) -> bool:
+        """Check if a user has access to a specific company. Admins have access to all."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+        if row[0] == 'admin':
+            conn.close()
+            return True
+        cursor.execute('''
+            SELECT 1 FROM user_companies WHERE user_id = ? AND company_id = ?
+        ''', (user_id, company_id))
+        result = cursor.fetchone() is not None
+        conn.close()
+        return result
+    
+    def get_users_for_company(self, company_id: str) -> List[dict]:
+        """Get all users assigned to a company."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT u.* FROM users u
+            JOIN user_companies uc ON u.id = uc.user_id
+            WHERE uc.company_id = ?
+            ORDER BY u.full_name
+        ''', (company_id,))
+        users = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return users
+    
+    def delete_company(self, company_id: str) -> bool:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM user_companies WHERE company_id = ?", (company_id,))
+        cursor.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
     
     def create_user(self, email: str, password: str, full_name: str) -> Optional[dict]:
         """Create a new user (pending approval)"""

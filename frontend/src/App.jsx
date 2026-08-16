@@ -61,7 +61,7 @@ const Empty = ({ text }) => <div className="empty-state">{text || 'No data found
 /* ═══════════════════════════════════════════════════════
    SIDEBAR
    ═══════════════════════════════════════════════════════ */
-function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting, user, onLogout, isAdmin }) {
+function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting, user, onLogout, isAdmin, companies, selectedCompany, onSelectCompany }) {
   const items = [
     { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
     { id: 'upload', label: 'Upload Invoice', icon: Icons.Upload },
@@ -81,6 +81,23 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
           <p>AlgoDynamix</p>
         </div>
       </div>
+      {companies && companies.length > 0 && (
+        <div className="sidebar-company-selector">
+          <label>Active Company</label>
+          <select
+            className="company-select"
+            value={selectedCompany?.id || ''}
+            onChange={(e) => {
+              const company = companies.find(c => c.id === e.target.value);
+              if (company) onSelectCompany(company);
+            }}
+          >
+            {companies.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <nav className="sidebar-nav">
         {items.map(({ id, label, icon: Icon }) => (
           <button key={id} className={`sidebar-nav-item ${active === id ? 'active' : ''}`} onClick={() => onNavigate(id)}>
@@ -93,7 +110,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
           {theme === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
           {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
-        <button className="sidebar-footer-btn danger" onClick={onReset} disabled={resetting} title="Delete all invoices and journal entries">
+        <button className="sidebar-footer-btn danger" onClick={onReset} disabled={resetting} title="Delete all invoices and journal entries for the active company">
           <span className={resetting ? 'spinning' : ''} style={{ display: 'flex' }}><Icons.Refresh /></span>
           {resetting ? 'Resetting…' : 'Reset Data'}
         </button>
@@ -900,13 +917,14 @@ function ChartOfAccounts() {
    ═══════════════════════════════════════════════════════ */
 
 function AppLayout() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, selectedCompany, selectCompany } = useAuth();
   const navigate = useNavigate();
   const [view, setView] = useState('dashboard');
   const [selectedId, setSelectedId] = useState(null);
   const [health, setHealth] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('fp-theme') || 'dark');
   const [resetting, setResetting] = useState(false);
+  const [companyKey, setCompanyKey] = useState(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -919,16 +937,26 @@ function AppLayout() {
     return () => clearInterval(t);
   }, []);
 
+  // Reload all data when company changes
+  const handleSelectCompany = (company) => {
+    selectCompany(company);
+    setView('dashboard');
+    setSelectedId(null);
+    setCompanyKey(k => k + 1);
+  };
+
   const nav = (v, id = null) => { setView(v); setSelectedId(id); window.scrollTo(0, 0); };
 
   const handleReset = async () => {
-    if (!window.confirm('This will permanently delete ALL invoices, journal entries and their uploaded documents.\n\nChart of accounts and learned classification rules are kept.\n\nAre you sure?')) return;
+    if (!window.confirm(`This will permanently delete ALL invoices and journal entries for ${selectedCompany?.name || 'the active company'}.\n\nChart of accounts and learned classification rules are kept.\n\nAre you sure?`)) return;
     setResetting(true);
     try {
       await resetAllData();
-      window.location.reload();
+      setCompanyKey(k => k + 1);
+      setView('dashboard');
     } catch (e) {
       alert(`Reset failed: ${e.message}`);
+    } finally {
       setResetting(false);
     }
   };
@@ -938,8 +966,19 @@ function AppLayout() {
     navigate('/login');
   };
 
+  if (!selectedCompany) {
+    return (
+      <div className="auth-loading">
+        <div style={{ textAlign: 'center' }}>
+          <p style={{ marginBottom: 16 }}>No company assigned. Please contact an administrator.</p>
+          <button className="btn btn-primary" onClick={handleLogout}>Sign Out</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="app-layout">
+    <div className="app-layout" key={companyKey}>
       <Sidebar
         active={view}
         onNavigate={nav}
@@ -951,6 +990,9 @@ function AppLayout() {
         user={user}
         onLogout={handleLogout}
         isAdmin={isAdmin()}
+        companies={user?.companies || []}
+        selectedCompany={selectedCompany}
+        onSelectCompany={handleSelectCompany}
       />
       <main className="main-content">
         {view === 'dashboard' && <Dashboard onNavigate={nav} />}

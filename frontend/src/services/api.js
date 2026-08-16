@@ -4,6 +4,19 @@ function authToken() {
   return localStorage.getItem('auth_token');
 }
 
+function companyHeader() {
+  const company = JSON.parse(localStorage.getItem('fp_company') || 'null');
+  return company ? { 'X-Company-Id': company.id } : {};
+}
+
+function authHeaders() {
+  const token = authToken();
+  return {
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...companyHeader(),
+  };
+}
+
 async function apiRequest(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
   const token = authToken();
@@ -12,6 +25,7 @@ async function apiRequest(endpoint, options = {}) {
     headers: {
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...companyHeader(),
       ...options.headers,
     },
   });
@@ -28,8 +42,54 @@ async function apiRequest(endpoint, options = {}) {
   return await response.json();
 }
 
+// ─── Auth ───────────────────────────────────────────────
+export const authApi = {
+  login: async (email, password) => {
+    const response = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Login failed');
+    return data;
+  },
+  register: async (email, password, fullName) => {
+    const response = await fetch(`${API_BASE}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, full_name: fullName }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Registration failed');
+    return data;
+  },
+  verify: async (token) => {
+    const response = await fetch(`${API_BASE}/auth/verify`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!response.ok) return null;
+    return response.json();
+  },
+  logout: async (token) => {
+    return fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    }).catch(() => {});
+  },
+  me: async () => {
+    const response = await fetch(`${API_BASE}/auth/me`, {
+      headers: authHeaders(),
+    });
+    if (!response.ok) throw new Error('Failed to fetch user');
+    return response.json();
+  },
+};
+
+// ─── Dashboard ──────────────────────────────────────────
 export const getDashboardStats = () => apiRequest('/dashboard/stats');
 
+// ─── Invoices ───────────────────────────────────────────
 export const getInvoices = (params = {}) => {
   const query = new URLSearchParams(params).toString();
   return apiRequest(`/invoices${query ? '?' + query : ''}`);
@@ -55,6 +115,7 @@ export const updateInvoiceStatus = (invoiceId, status) =>
 export const deleteInvoice = (invoiceId) =>
   apiRequest(`/invoices/${invoiceId}`, { method: 'DELETE' });
 
+// ─── Journal Entries ────────────────────────────────────
 export const getJournalEntries = (params = {}) => {
   const query = new URLSearchParams(params).toString();
   return apiRequest(`/accounting/entries${query ? '?' + query : ''}`);
@@ -66,6 +127,7 @@ export const postJournalEntry = (entryId) =>
 export const reverseJournalEntry = (entryId) =>
   apiRequest(`/accounting/entries/${entryId}/reverse`, { method: 'POST' });
 
+// ─── Chart of Accounts ──────────────────────────────────
 export const getChartOfAccounts = (category = '') =>
   apiRequest(`/accounting/chart-of-accounts${category ? '?category=' + category : ''}`);
 
@@ -74,15 +136,27 @@ export const suggestAccount = (description, type = 'supplier') =>
 
 export const checkHealth = () => apiRequest('/health');
 
-// ─── Admin ───────────────────────────────────────────────
+// ─── Admin ──────────────────────────────────────────────
 export const resetAllData = () =>
   apiRequest('/admin/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) });
 
-// ─── Export ──────────────────────────────────────────────
-export const exportJournalEntriesExcel = async (status = 'posted') => {
-  const API_BASE2 = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  const url = `${API_BASE2}/accounting/export/excel?status=${status}`;
-  const response = await fetch(url);
+// ─── Company Admin ──────────────────────────────────────
+export const getCompanies = () => apiRequest('/auth/admin/companies');
+export const createCompany = (code, name, currency = 'MUR') =>
+  apiRequest('/auth/admin/companies', { method: 'POST', body: JSON.stringify({ code, name, currency }) });
+export const deleteCompany = (companyId) =>
+  apiRequest(`/auth/admin/companies/${companyId}`, { method: 'DELETE' });
+export const getCompanyUsers = (companyId) => apiRequest(`/auth/admin/companies/${companyId}/users`);
+export const assignUserToCompany = (companyId, userId) =>
+  apiRequest(`/auth/admin/companies/${companyId}/users/${userId}`, { method: 'POST' });
+export const removeUserFromCompany = (companyId, userId) =>
+  apiRequest(`/auth/admin/companies/${companyId}/users/${userId}`, { method: 'DELETE' });
+
+// ─── Export (blob downloads) ────────────────────────────
+async function downloadBlob(endpoint, filename) {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    headers: authHeaders(),
+  });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `Export failed: ${response.status}`);
@@ -91,54 +165,37 @@ export const exportJournalEntriesExcel = async (status = 'posted') => {
   const downloadUrl = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = downloadUrl;
-  a.download = `journal_entries_${status}_${new Date().toISOString().slice(0,10)}.xlsx`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   window.URL.revokeObjectURL(downloadUrl);
-};
+}
 
-export const exportJournalEntriesSage200 = async (status = 'posted', transactionType = 'JL') => {
-  const API_BASE2 = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  const url = `${API_BASE2}/accounting/export/sage200?status=${status}&transaction_type=${transactionType}`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `Export failed: ${response.status}`);
-  }
-  const blob = await response.blob();
-  const downloadUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = downloadUrl;
-  a.download = `Sage200_GL_Journal_${status}_${transactionType}_${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.URL.revokeObjectURL(downloadUrl);
-};
+export const exportJournalEntriesExcel = (status = 'posted') =>
+  downloadBlob(`/accounting/export/excel?status=${status}`, `journal_entries_${status}_${new Date().toISOString().slice(0,10)}.xlsx`);
 
-// ─── Document Viewer ─────────────────────────────────────
+export const exportJournalEntriesSage200 = (status = 'posted', transactionType = 'JL') =>
+  downloadBlob(`/accounting/export/sage200?status=${status}&transaction_type=${transactionType}`, `Sage200_GL_Journal_${status}_${transactionType}_${new Date().toISOString().slice(0,10)}.csv`);
+
+// ─── Document Viewer ────────────────────────────────────
 export const getInvoiceDocumentUrl = (invoiceId) => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  return `${base}/invoices/${invoiceId}/document`;
+  return `${API_BASE}/invoices/${invoiceId}/document`;
 };
 
-
-// ─── Document Preview ────────────────────────────────────
 export const getInvoiceDocumentPreview = async (invoiceId, page = 0) => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  const response = await fetch(`${base}/invoices/${invoiceId}/document/preview?page=${page}`);
+  const response = await fetch(`${API_BASE}/invoices/${invoiceId}/document/preview?page=${page}`, {
+    headers: authHeaders(),
+  });
   if (!response.ok) throw new Error('Preview not available');
   return response.json();
 };
 
-
-// ─── Reclassify ──────────────────────────────────────────
+// ─── Reclassify ─────────────────────────────────────────
 export const reclassifyInvoice = async (invoiceId, userContext) => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  const response = await fetch(`${base}/invoices/${invoiceId}/reclassify`, {
+  const response = await fetch(`${API_BASE}/invoices/${invoiceId}/reclassify`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ user_context: userContext }),
   });
   if (!response.ok) {
@@ -148,18 +205,8 @@ export const reclassifyInvoice = async (invoiceId, userContext) => {
   return response.json();
 };
 
+// ─── Classification Rules ───────────────────────────────
+export const getClassificationRules = () => apiRequest('/accounting/classification-rules');
 
-// ─── Classification Rules ────────────────────────────────
-export const getClassificationRules = async () => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  const response = await fetch(`${base}/accounting/classification-rules`);
-  if (!response.ok) throw new Error('Failed to fetch rules');
-  return response.json();
-};
-
-export const deleteClassificationRule = async (ruleId) => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-  const response = await fetch(`${base}/accounting/classification-rules/${ruleId}`, { method: 'DELETE' });
-  if (!response.ok) throw new Error('Failed to delete rule');
-  return response.json();
-};
+export const deleteClassificationRule = (ruleId) =>
+  apiRequest(`/accounting/classification-rules/${ruleId}`, { method: 'DELETE' });

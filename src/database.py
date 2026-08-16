@@ -65,7 +65,10 @@ class Invoice(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
+    # Multi-company
+    company_id = Column(String(50), index=True)
+
     # Relationships
     line_items = relationship("InvoiceLineItemDB", back_populates="invoice", cascade="all, delete-orphan")
     journal_entries = relationship("JournalEntryDB", back_populates="invoice", cascade="all, delete-orphan")
@@ -105,7 +108,10 @@ class JournalEntryDB(Base):
     status = Column(String(20), default="draft")
     created_by = Column(String(100), default="system")
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
+    # Multi-company
+    company_id = Column(String(50), index=True)
+
     invoice = relationship("Invoice", back_populates="journal_entries")
     lines = relationship("JournalEntryLineDB", back_populates="journal_entry", cascade="all, delete-orphan")
 
@@ -156,12 +162,68 @@ class ClassificationRule(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Multi-company
+    company_id = Column(String(50), index=True)
+
 
 def init_db():
-    """Create all tables and seed chart of accounts"""
+    """Create all tables, run migrations, and seed chart of accounts"""
     Base.metadata.create_all(bind=engine)
     logger.info("✅ Database tables created")
+    _migrate_business_db()
     _seed_chart_of_accounts()
+
+
+def _migrate_business_db():
+    """Add company_id columns to existing tables and backfill to default company."""
+    import sqlite3
+    import os
+    from src.auth_models import auth_db
+
+    db_path = os.getenv("FINNPAYMENTS_DB_URL", "sqlite:///finnpayments.db")
+    if db_path.startswith("sqlite:///"):
+        db_path = db_path.replace("sqlite:///", "")
+
+    if not os.path.exists(db_path):
+        return  # fresh DB, create_all already made columns
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    def column_exists(table, column):
+        cursor.execute(f"PRAGMA table_info({table})")
+        return any(row[1] == column for row in cursor.fetchall())
+
+    # Add company_id to invoices, journal_entries, classification_rules
+    for table in ["invoices", "journal_entries", "classification_rules"]:
+        if not column_exists(table, "company_id"):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN company_id TEXT")
+            logger.info(f"✅ Added company_id column to {table}")
+
+    conn.commit()
+
+    # Backfill: assign all existing rows to the default company
+    companies = auth_db.get_companies()
+    if not companies:
+        conn.close()
+        return
+
+    default_company_id = companies[0]['id']
+
+    for table in ["invoices", "journal_entries", "classification_rules"]:
+        cursor.execute(f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL", (default_company_id,))
+        if cursor.rowcount > 0:
+            logger.info(f"✅ Backfilled {cursor.rowcount} rows in {table} to default company")
+
+    # Create index on company_id for performance
+    for table in ["invoices", "journal_entries", "classification_rules"]:
+        try:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_company_id ON {table} (company_id)")
+        except Exception:
+            pass
+
+    conn.commit()
+    conn.close()
 
 
 def _seed_chart_of_accounts():

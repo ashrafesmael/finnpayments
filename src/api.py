@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel as PydanticBaseModel
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
@@ -33,7 +33,7 @@ from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
     generate_accounting_entries, validate_journal_entry, suggest_account_code
 )
-from src.auth_api import router as auth_router
+from src.auth_api import router as auth_router, get_current_company, get_current_user
 
 logger = logging.getLogger("FinnPayments.API")
 
@@ -125,6 +125,7 @@ async def upload_invoice(
     invoice_type: str = Form("supplier"),
     project_code: Optional[str] = Form(None),
     cost_center: Optional[str] = Form(None),
+    company: dict = Depends(get_current_company),
 ):
     """
     Upload an invoice document for processing.
@@ -149,7 +150,7 @@ async def upload_invoice(
     
     # Process the invoice
     try:
-        result = await process_invoice(str(file_path), invoice_type)
+        result = await process_invoice(str(file_path), invoice_type, company_id=company['id'])
     except Exception as e:
         logger.error(f"❌ Processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
@@ -159,7 +160,7 @@ async def upload_invoice(
         logger.info(f"📋 Multi-invoice upload: {len(result)} invoices detected")
         for r in result:
             try:
-                _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center)
+                _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center, company['id'])
                 results_store[r["invoice_id"]] = r
             except Exception as e:
                 logger.error(f"❌ Database save error for {r['invoice_id']}: {e}")
@@ -175,7 +176,7 @@ async def upload_invoice(
     
     # Single invoice
     try:
-        _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center)
+        _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center, company['id'])
     except Exception as e:
         logger.error(f"❌ Database save error: {e}")
     
@@ -188,7 +189,7 @@ async def upload_invoice(
 
 
 @app.post("/invoices/manual")
-async def create_manual_invoice(request: InvoiceCreateRequest):
+async def create_manual_invoice(request: InvoiceCreateRequest, company: dict = Depends(get_current_company)):
     """Create an invoice manually (no document upload)"""
     invoice_id = generate_invoice_id()
     
@@ -210,7 +211,7 @@ async def create_manual_invoice(request: InvoiceCreateRequest):
     }
     
     # Generate accounting entries
-    entries = generate_accounting_entries(invoice_id, invoice_data, request.invoice_type.value)
+    entries = generate_accounting_entries(invoice_id, invoice_data, request.invoice_type.value, company_id=company['id'])
     
     result = {
         "invoice_id": invoice_id,
@@ -221,7 +222,7 @@ async def create_manual_invoice(request: InvoiceCreateRequest):
         "message": "Manual invoice created successfully"
     }
     
-    _save_invoice_to_db(result, request.invoice_type.value, None, request.project_code, request.cost_center)
+    _save_invoice_to_db(result, request.invoice_type.value, None, request.project_code, request.cost_center, company['id'])
     results_store[invoice_id] = result
     
     return result
@@ -236,10 +237,11 @@ async def list_invoices(
     limit: int = Query(50, le=200),
     offset: int = 0,
     search: Optional[str] = None,
+    company: dict = Depends(get_current_company),
 ):
     """List all invoices with optional filtering"""
     with get_db() as db:
-        query = db.query(Invoice).order_by(Invoice.created_at.desc())
+        query = db.query(Invoice).filter(Invoice.company_id == company['id']).order_by(Invoice.created_at.desc())
         
         if status:
             query = query.filter(Invoice.status == status)
@@ -263,10 +265,10 @@ async def list_invoices(
 
 
 @app.get("/invoices/{invoice_id}")
-async def get_invoice(invoice_id: str):
+async def get_invoice(invoice_id: str, company: dict = Depends(get_current_company)):
     """Get invoice details with line items and journal entries"""
     with get_db() as db:
-        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         
@@ -324,14 +326,14 @@ async def get_invoice(invoice_id: str):
 
 
 @app.patch("/invoices/{invoice_id}/status")
-async def update_invoice_status(invoice_id: str, status: str):
+async def update_invoice_status(invoice_id: str, status: str, company: dict = Depends(get_current_company)):
     """Update invoice status (approve, reject, post, etc.)"""
     valid_statuses = [s.value for s in InvoiceStatus]
     if status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
     
     with get_db() as db:
-        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         
@@ -357,10 +359,10 @@ async def update_invoice_status(invoice_id: str, status: str):
 
 
 @app.get("/invoices/{invoice_id}/document")
-async def get_invoice_document(invoice_id: str):
+async def get_invoice_document(invoice_id: str, company: dict = Depends(get_current_company)):
     """Serve the original uploaded document for an invoice"""
     with get_db() as db:
-        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if not invoice.source_file:
@@ -399,13 +401,13 @@ async def get_invoice_document(invoice_id: str):
 
 
 @app.get("/invoices/{invoice_id}/document/preview")
-async def get_invoice_document_preview(invoice_id: str, page: int = Query(0, ge=0)):
+async def get_invoice_document_preview(invoice_id: str, page: int = Query(0, ge=0), company: dict = Depends(get_current_company)):
     """Return invoice document pages as base64 images for inline viewing."""
     import base64
     from io import BytesIO
 
     with get_db() as db:
-        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if not invoice.source_file:
@@ -479,7 +481,7 @@ class ReclassifyRequest(PydanticBaseModel):
 
 
 @app.post("/invoices/{invoice_id}/reclassify")
-async def reclassify_invoice(invoice_id: str, request: ReclassifyRequest):
+async def reclassify_invoice(invoice_id: str, request: ReclassifyRequest, company: dict = Depends(get_current_company)):
     """
     Reclassify invoice line items using user-provided context.
     Called when the system defaulted to Licences (01-6000-04) and the user
@@ -488,7 +490,7 @@ async def reclassify_invoice(invoice_id: str, request: ReclassifyRequest):
     import httpx
 
     with get_db() as db:
-        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
 
@@ -709,10 +711,10 @@ Return ONLY valid JSON, no markdown."""
         # Save classification rules for future learning
         for u in updates:
             if u["new_account"] != "01-6000-04":  # Don't learn the default
-                # Check if rule already exists for this vendor
                 existing = db.query(ClassificationRule).filter(
                     ClassificationRule.vendor_name == invoice.vendor_name,
                     ClassificationRule.account_code == u["new_account"],
+                    ClassificationRule.company_id == company['id'],
                 ).first()
                 if existing:
                     existing.user_context = request.user_context
@@ -727,6 +729,7 @@ Return ONLY valid JSON, no markdown."""
                         user_context=request.user_context,
                         source="reclassify",
                         times_used=1,
+                        company_id=company['id'],
                     ))
                 db.commit()
 
@@ -741,10 +744,10 @@ Return ONLY valid JSON, no markdown."""
         }
 
 @app.delete("/invoices/{invoice_id}")
-async def delete_invoice(invoice_id: str):
+async def delete_invoice(invoice_id: str, company: dict = Depends(get_current_company)):
     """Delete an invoice (only if draft or pending)"""
     with get_db() as db:
-        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         
@@ -767,25 +770,28 @@ class ResetConfirmRequest(PydanticBaseModel):
 
 
 @app.post("/admin/reset")
-async def reset_all_data(request: ResetConfirmRequest):
-    """Delete ALL invoices, line items and journal entries, plus their uploaded documents.
+async def reset_all_data(request: ResetConfirmRequest, company: dict = Depends(get_current_company)):
+    """Delete ALL invoices, line items and journal entries for the current company, plus their uploaded documents.
     Chart of accounts and learned classification rules are preserved."""
     if not request.confirm:
         raise HTTPException(status_code=400, detail='Confirmation required: pass {"confirm": true}')
 
     with get_db() as db:
-        invoice_count = db.query(Invoice).count()
-        entry_count = db.query(JournalEntryDB).count()
-        source_files = [row[0] for row in db.query(Invoice.source_file).all()]
+        invoice_count = db.query(Invoice).filter(Invoice.company_id == company['id']).count()
+        entry_count = db.query(JournalEntryDB).filter(JournalEntryDB.company_id == company['id']).count()
+        source_files = [row[0] for row in db.query(Invoice.source_file).filter(Invoice.company_id == company['id']).all()]
 
-        # Bulk deletes bypass ORM cascades, so delete children first
-        db.query(JournalEntryLineDB).delete(synchronize_session=False)
-        db.query(JournalEntryDB).delete(synchronize_session=False)
-        db.query(InvoiceLineItemDB).delete(synchronize_session=False)
-        db.query(Invoice).delete(synchronize_session=False)
+        # Delete children first, scoped by company
+        entry_ids = [row[0] for row in db.query(JournalEntryDB.entry_id).filter(JournalEntryDB.company_id == company['id']).all()]
+        if entry_ids:
+            db.query(JournalEntryLineDB).filter(JournalEntryLineDB.entry_id.in_(entry_ids)).delete(synchronize_session=False)
+        db.query(JournalEntryDB).filter(JournalEntryDB.company_id == company['id']).delete(synchronize_session=False)
+
+        invoice_ids = [row[0] for row in db.query(Invoice.invoice_id).filter(Invoice.company_id == company['id']).all()]
+        if invoice_ids:
+            db.query(InvoiceLineItemDB).filter(InvoiceLineItemDB.invoice_id.in_(invoice_ids)).delete(synchronize_session=False)
+        db.query(Invoice).filter(Invoice.company_id == company['id']).delete(synchronize_session=False)
         db.commit()
-
-    results_store.clear()
 
     # Remove uploaded documents that belonged to the deleted invoices
     safe_dirs = {upload_directory.resolve(), (Path.cwd() / "temp_uploads").resolve()}
@@ -803,9 +809,9 @@ async def reset_all_data(request: ResetConfirmRequest):
         except OSError:
             logger.warning(f"Could not remove uploaded file: {p}")
 
-    logger.info(f"Reset complete: {invoice_count} invoices, {entry_count} journal entries, {files_removed} files removed")
+    logger.info(f"Reset complete for {company['name']}: {invoice_count} invoices, {entry_count} journal entries, {files_removed} files removed")
     return {
-        "message": "All invoice records and journal entries deleted",
+        "message": f"All invoice records and journal entries deleted for {company['name']}",
         "invoices_deleted": invoice_count,
         "journal_entries_deleted": entry_count,
         "files_removed": files_removed,
@@ -819,10 +825,11 @@ async def list_journal_entries(
     status: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    company: dict = Depends(get_current_company),
 ):
     """List all journal entries"""
     with get_db() as db:
-        query = db.query(JournalEntryDB).order_by(JournalEntryDB.created_at.desc())
+        query = db.query(JournalEntryDB).filter(JournalEntryDB.company_id == company['id']).order_by(JournalEntryDB.created_at.desc())
         
         if status:
             query = query.filter(JournalEntryDB.status == status)
@@ -862,10 +869,10 @@ async def list_journal_entries(
 
 
 @app.post("/accounting/entries/{entry_id}/post")
-async def post_journal_entry(entry_id: str):
+async def post_journal_entry(entry_id: str, company: dict = Depends(get_current_company)):
     """Post a journal entry (make it permanent)"""
     with get_db() as db:
-        entry = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id).first()
+        entry = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id, JournalEntryDB.company_id == company['id']).first()
         if not entry:
             raise HTTPException(status_code=404, detail="Journal entry not found")
         
@@ -890,10 +897,10 @@ async def post_journal_entry(entry_id: str):
 
 
 @app.post("/accounting/entries/{entry_id}/reverse")
-async def reverse_journal_entry(entry_id: str):
+async def reverse_journal_entry(entry_id: str, company: dict = Depends(get_current_company)):
     """Create a reversing entry"""
     with get_db() as db:
-        original = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id).first()
+        original = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id, JournalEntryDB.company_id == company['id']).first()
         if not original:
             raise HTTPException(status_code=404, detail="Journal entry not found")
         
@@ -911,6 +918,7 @@ async def reverse_journal_entry(entry_id: str):
             is_balanced=True,
             status="draft",
             created_by="system",
+            company_id=company['id'],
         )
         db.add(reversal)
         
@@ -942,10 +950,12 @@ async def reverse_journal_entry(entry_id: str):
 
 
 @app.get("/accounting/classification-rules")
-async def list_classification_rules():
+async def list_classification_rules(company: dict = Depends(get_current_company)):
     """List all learned classification rules"""
     with get_db() as db:
-        rules = db.query(ClassificationRule).order_by(
+        rules = db.query(ClassificationRule).filter(
+            ClassificationRule.company_id == company['id']
+        ).order_by(
             ClassificationRule.times_used.desc(),
             ClassificationRule.updated_at.desc()
         ).all()
@@ -970,10 +980,13 @@ async def list_classification_rules():
 
 
 @app.delete("/accounting/classification-rules/{rule_id}")
-async def delete_classification_rule(rule_id: int):
+async def delete_classification_rule(rule_id: int, company: dict = Depends(get_current_company)):
     """Delete a learned classification rule"""
     with get_db() as db:
-        rule = db.query(ClassificationRule).filter(ClassificationRule.id == rule_id).first()
+        rule = db.query(ClassificationRule).filter(
+            ClassificationRule.id == rule_id,
+            ClassificationRule.company_id == company['id'],
+        ).first()
         if not rule:
             raise HTTPException(status_code=404, detail="Rule not found")
         db.delete(rule)
@@ -1009,6 +1022,7 @@ async def get_chart_of_accounts(category: Optional[str] = None):
 @app.get("/accounting/export/excel")
 async def export_journal_entries_excel(
     status: Optional[str] = "posted",
+    company: dict = Depends(get_current_company),
 ):
     """Export journal entries to Excel. Defaults to posted entries only."""
     import openpyxl
@@ -1017,7 +1031,7 @@ async def export_journal_entries_excel(
     import tempfile
 
     with get_db() as db:
-        query = db.query(JournalEntryDB).order_by(JournalEntryDB.entry_date.asc(), JournalEntryDB.created_at.asc())
+        query = db.query(JournalEntryDB).filter(JournalEntryDB.company_id == company['id']).order_by(JournalEntryDB.entry_date.asc(), JournalEntryDB.created_at.asc())
         if status:
             query = query.filter(JournalEntryDB.status == status)
         entries = query.all()
@@ -1192,6 +1206,7 @@ async def export_journal_entries_excel(
 async def export_journal_entries_sage200(
     status: Optional[str] = "posted",
     transaction_type: str = "JL",
+    company: dict = Depends(get_current_company),
 ):
     """Export journal entries as a Sage 200 Evolution GL Journal Batch CSV.
 
@@ -1248,7 +1263,7 @@ async def export_journal_entries_sage200(
     ])
 
     with get_db() as db:
-        query = db.query(JournalEntryDB).order_by(
+        query = db.query(JournalEntryDB).filter(JournalEntryDB.company_id == company['id']).order_by(
             JournalEntryDB.entry_date.asc(), JournalEntryDB.created_at.asc()
         )
         if status:
@@ -1283,37 +1298,39 @@ async def export_journal_entries_sage200(
     )
 
 @app.get("/accounting/suggest-account")
-async def suggest_account(description: str, type: str = "supplier"):
+async def suggest_account(description: str, type: str = "supplier", company: dict = Depends(get_current_company)):
     """AI-powered account code suggestion"""
-    code, name = suggest_account_code(description, type)
+    code, name = suggest_account_code(description, type, company_id=company['id'])
     return {"account_code": code, "account_name": name, "description": description}
 
 
 # ─── Dashboard ────────────────────────────────────────────
 
 @app.get("/dashboard/stats")
-async def get_dashboard_stats():
+async def get_dashboard_stats(company: dict = Depends(get_current_company)):
     """Get dashboard statistics"""
     with get_db() as db:
-        total = db.query(Invoice).count()
-        pending = db.query(Invoice).filter(Invoice.status == "pending_review").count()
-        approved = db.query(Invoice).filter(Invoice.status == "approved").count()
-        posted = db.query(Invoice).filter(Invoice.status == "posted").count()
+        total = db.query(Invoice).filter(Invoice.company_id == company['id']).count()
+        pending = db.query(Invoice).filter(Invoice.company_id == company['id'], Invoice.status == "pending_review").count()
+        approved = db.query(Invoice).filter(Invoice.company_id == company['id'], Invoice.status == "approved").count()
+        posted = db.query(Invoice).filter(Invoice.company_id == company['id'], Invoice.status == "posted").count()
         
         # Totals by type
         from sqlalchemy import func
         payable = db.query(func.sum(Invoice.total_amount)).filter(
+            Invoice.company_id == company['id'],
             Invoice.invoice_type == "supplier",
             Invoice.status.in_(["pending_review", "approved", "posted"])
         ).scalar() or 0.0
         
         receivable = db.query(func.sum(Invoice.total_amount)).filter(
+            Invoice.company_id == company['id'],
             Invoice.invoice_type == "client",
             Invoice.status.in_(["pending_review", "approved", "posted"])
         ).scalar() or 0.0
         
         # Recent invoices
-        recent = db.query(Invoice).order_by(Invoice.created_at.desc()).limit(10).all()
+        recent = db.query(Invoice).filter(Invoice.company_id == company['id']).order_by(Invoice.created_at.desc()).limit(10).all()
         
         return {
             "total_invoices": total,
@@ -1351,13 +1368,12 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
     }
 
 
-def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str], project_code: Optional[str], cost_center: Optional[str]):
+def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str], project_code: Optional[str], cost_center: Optional[str], company_id: str = None):
     """Save processed invoice and its entries to the database"""
     extracted = result.get("extracted_data", {})
     invoice_id = result["invoice_id"]
     
     with get_db() as db:
-        # Create invoice record
         invoice = Invoice(
             invoice_id=invoice_id,
             invoice_type=invoice_type,
@@ -1382,6 +1398,7 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
             raw_text=extracted.get("raw_text", "")[:5000],
             ai_analysis=json.dumps(extracted.get("ai_analysis")) if extracted.get("ai_analysis") else None,
             source_file=file_path,
+            company_id=company_id,
         )
         db.add(invoice)
         
@@ -1398,7 +1415,7 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
                     amount=item.get("amount", 0),
                     tax_rate=item.get("tax_rate", 15.0),
                     tax_amount=item.get("tax_amount", 0),
-                    account_code=item.get("account_code") or suggest_account_code(item.get("description", ""), invoice_type)[0],
+                    account_code=item.get("account_code") or suggest_account_code(item.get("description", ""), invoice_type, company_id=company_id)[0],
                     cost_center=cost_center,
                     project_code=project_code,
                 )
@@ -1417,6 +1434,7 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
                 is_balanced=entry.get("is_balanced", True),
                 status="draft",
                 created_by=entry.get("created_by", "system"),
+                company_id=company_id,
             )
             db.add(je)
             

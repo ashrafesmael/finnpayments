@@ -14,6 +14,9 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('auth_token'));
   const [loading, setLoading] = useState(true);
+  const [selectedCompany, setSelectedCompany] = useState(
+    JSON.parse(localStorage.getItem('fp_company') || 'null')
+  );
 
   const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -24,6 +27,22 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
     }
   }, []);
+
+  // Ensure selectedCompany is valid for the current user
+  useEffect(() => {
+    if (user && user.companies) {
+      if (selectedCompany) {
+        const stillValid = user.companies.find(c => c.id === selectedCompany.id);
+        if (!stillValid) {
+          setSelectedCompany(user.companies[0] || null);
+          localStorage.setItem('fp_company', JSON.stringify(user.companies[0] || null));
+        }
+      } else if (user.companies.length > 0) {
+        setSelectedCompany(user.companies[0]);
+        localStorage.setItem('fp_company', JSON.stringify(user.companies[0]));
+      }
+    }
+  }, [user]);
 
   const verifyToken = async () => {
     try {
@@ -57,6 +76,11 @@ export const AuthProvider = ({ children }) => {
     setToken(data.access_token);
     setUser(data.user);
     localStorage.setItem('auth_token', data.access_token);
+    // Auto-select first company
+    if (data.user.companies && data.user.companies.length > 0) {
+      setSelectedCompany(data.user.companies[0]);
+      localStorage.setItem('fp_company', JSON.stringify(data.user.companies[0]));
+    }
     return data;
   };
 
@@ -82,13 +106,36 @@ export const AuthProvider = ({ children }) => {
     }
     setToken(null);
     setUser(null);
+    setSelectedCompany(null);
     localStorage.removeItem('auth_token');
+    localStorage.removeItem('fp_company');
+  };
+
+  const selectCompany = (company) => {
+    setSelectedCompany(company);
+    localStorage.setItem('fp_company', JSON.stringify(company));
   };
 
   const isAdmin = () => user?.role === 'admin';
 
+  const refreshUser = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(API_URL + '/auth/me', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data);
+      }
+    } catch (e) {
+      console.error('Failed to refresh user:', e);
+    }
+  };
+
   const value = {
     user, token, loading, login, register, logout, isAdmin,
+    selectedCompany, selectCompany, refreshUser,
     isAuthenticated: !!user
   };
 

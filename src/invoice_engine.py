@@ -152,7 +152,7 @@ def detect_invoice_groups(pages: list) -> list:
     return groups if len(groups) > 1 else []
 
 
-async def process_multi_invoice_pdf(file_path: str, invoice_type: str = "supplier") -> list:
+async def process_multi_invoice_pdf(file_path: str, invoice_type: str = "supplier", company_id: str = None) -> list:
     """Process a PDF containing multiple invoices."""
     pages = extract_pages_from_pdf(file_path)
     groups = detect_invoice_groups(pages)
@@ -166,9 +166,9 @@ async def process_multi_invoice_pdf(file_path: str, invoice_type: str = "supplie
         logger.info(f"Processing invoice {i+1}/{len(groups)}: {invoice_id}")
         regex_result = parse_invoice_with_regex(invoice_text)
         regex_result["raw_text"] = invoice_text
-        enhanced_data = await enhance_with_ai(invoice_text, regex_result)
+        enhanced_data = await enhance_with_ai(invoice_text, regex_result, company_id=company_id)
         from src.accounting_engine import generate_accounting_entries
-        entries = generate_accounting_entries(invoice_id, enhanced_data, invoice_type)
+        entries = generate_accounting_entries(invoice_id, enhanced_data, invoice_type, company_id=company_id)
         processing_time = time.time() - start_time
         result = {
             "invoice_id": invoice_id,
@@ -364,7 +364,7 @@ def parse_invoice_with_regex(text: str) -> Dict[str, Any]:
 
 # ─── AI-Enhanced Extraction ──────────────────────────────
 
-async def enhance_with_ai(raw_text: str, regex_result: Dict[str, Any]) -> Dict[str, Any]:
+async def enhance_with_ai(raw_text: str, regex_result: Dict[str, Any], company_id: str = None) -> Dict[str, Any]:
     """
     Use Groq LLM to enhance invoice data extraction.
     Mirrors FinnVerify's Groq integration pattern.
@@ -380,7 +380,7 @@ async def enhance_with_ai(raw_text: str, regex_result: Dict[str, Any]) -> Dict[s
         # Get learned classification rules for LLM context
         try:
             from src.accounting_engine import get_learned_rules_for_prompt
-            learned_rules = get_learned_rules_for_prompt()
+            learned_rules = get_learned_rules_for_prompt(company_id=company_id)
         except Exception:
             learned_rules = ""
 
@@ -524,7 +524,7 @@ Return ONLY valid JSON, no markdown formatting."""
 
 # ─── Main Processing Pipeline ────────────────────────────
 
-async def process_invoice(file_path: str, invoice_type: str = "supplier"):
+async def process_invoice(file_path: str, invoice_type: str = "supplier", company_id: str = None):
     """
     Full invoice processing pipeline.
     Detects multi-invoice PDFs and processes each separately.
@@ -535,7 +535,7 @@ async def process_invoice(file_path: str, invoice_type: str = "supplier"):
     # Check for multi-invoice PDF
     ext = Path(file_path).suffix.lower()
     if ext == '.pdf':
-        multi_results = await process_multi_invoice_pdf(file_path, invoice_type)
+        multi_results = await process_multi_invoice_pdf(file_path, invoice_type, company_id=company_id)
         if multi_results:
             logger.info(f"📋 Multi-invoice PDF: {len(multi_results)} invoices detected")
             return multi_results
@@ -559,11 +559,11 @@ async def process_invoice(file_path: str, invoice_type: str = "supplier"):
     regex_result["raw_text"] = raw_text
     
     # Step 3: AI enhancement
-    enhanced_data = await enhance_with_ai(raw_text, regex_result)
+    enhanced_data = await enhance_with_ai(raw_text, regex_result, company_id=company_id)
     
     # Step 4: Generate accounting entries
     from src.accounting_engine import generate_accounting_entries
-    entries = generate_accounting_entries(invoice_id, enhanced_data, invoice_type)
+    entries = generate_accounting_entries(invoice_id, enhanced_data, invoice_type, company_id=company_id)
     
     processing_time = time.time() - start_time
     
