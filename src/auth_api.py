@@ -279,6 +279,36 @@ async def delete_company(company_id: str, admin: dict = Depends(require_admin)):
     return {"message": "Company deleted successfully"}
 
 
+class MakerCheckerToggle(BaseModel):
+    enabled: bool
+
+
+@router.put("/admin/companies/{company_id}/maker-checker")
+async def toggle_maker_checker(
+    company_id: str,
+    request: MakerCheckerToggle,
+    admin: dict = Depends(require_admin),
+):
+    """Enable or disable maker/checker for a company (admin only)"""
+    company = auth_db.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    if request.enabled:
+        user_count = auth_db.get_company_user_count(company_id)
+        if user_count < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Maker/checker requires at least 2 users assigned to this company."
+            )
+
+    auth_db.update_company_maker_checker(company_id, request.enabled)
+    return {
+        "message": f"Maker/checker {'enabled' if request.enabled else 'disabled'} for {company['name']}",
+        "maker_checker_enabled": request.enabled,
+    }
+
+
 @router.get("/admin/companies/{company_id}/users", response_model=list)
 async def get_company_users(company_id: str, admin: dict = Depends(require_admin)):
     """Get users assigned to a company (admin only)"""

@@ -38,6 +38,7 @@ class CompanyResponse(BaseModel):
     code: str
     name: str
     currency: str = "MUR"
+    maker_checker_enabled: bool = False
     created_at: str
 
 class UserResponse(BaseModel):
@@ -111,6 +112,7 @@ class AuthDatabase:
                 code TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
                 currency TEXT DEFAULT 'MUR',
+                maker_checker_enabled INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL
             )
         ''')
@@ -180,8 +182,11 @@ class AuthDatabase:
             cursor.execute(f"PRAGMA table_info({table})")
             return any(row[1] == column for row in cursor.fetchall())
         
-        # No new columns needed on users/sessions yet — companies/user_companies
-        # are created via CREATE TABLE IF NOT EXISTS above.
+        # Add maker_checker_enabled to companies table for existing DBs
+        if not column_exists("companies", "maker_checker_enabled"):
+            cursor.execute("ALTER TABLE companies ADD COLUMN maker_checker_enabled INTEGER DEFAULT 0")
+            logger.info("✅ Added maker_checker_enabled column to companies")
+        
         conn.commit()
         conn.close()
     
@@ -255,7 +260,7 @@ class AuthDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM companies ORDER BY name")
-        companies = [dict(row) for row in cursor.fetchall()]
+        companies = [self._normalize_company(dict(row)) for row in cursor.fetchall()]
         conn.close()
         return companies
     
@@ -265,7 +270,7 @@ class AuthDatabase:
         cursor.execute("SELECT * FROM companies WHERE id = ?", (company_id,))
         row = cursor.fetchone()
         conn.close()
-        return dict(row) if row else None
+        return self._normalize_company(dict(row)) if row else None
     
     def get_user_companies(self, user_id: str) -> List[dict]:
         """Get companies a user has access to. Admins see all companies."""
@@ -282,9 +287,16 @@ class AuthDatabase:
                 WHERE uc.user_id = ?
                 ORDER BY c.name
             ''', (user_id,))
-        companies = [dict(row) for row in cursor.fetchall()]
+        companies = [self._normalize_company(dict(row)) for row in cursor.fetchall()]
         conn.close()
         return companies
+    
+    @staticmethod
+    def _normalize_company(c: dict) -> dict:
+        """Normalize maker_checker_enabled from int to bool."""
+        if 'maker_checker_enabled' in c:
+            c['maker_checker_enabled'] = bool(c['maker_checker_enabled'])
+        return c
     
     def assign_user_to_company(self, user_id: str, company_id: str) -> bool:
         conn = self._get_connection()
@@ -351,6 +363,28 @@ class AuthDatabase:
         conn.commit()
         conn.close()
         return success
+    
+    def update_company_maker_checker(self, company_id: str, enabled: bool) -> bool:
+        """Enable or disable maker/checker for a company."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE companies SET maker_checker_enabled = ? WHERE id = ?",
+            (1 if enabled else 0, company_id)
+        )
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def get_company_user_count(self, company_id: str) -> int:
+        """Count users assigned to a company (for maker/checker validation)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM user_companies WHERE company_id = ?", (company_id,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
     
     def create_user(self, email: str, password: str, full_name: str) -> Optional[dict]:
         """Create a new user (pending approval)"""

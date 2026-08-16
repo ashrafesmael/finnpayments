@@ -254,3 +254,42 @@ button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Maker/Checker toggle */
+.mc-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+.mc-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.mc-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-surface-hover);
+  border-radius: 20px;
+  transition: 0.2s;
+}
+.mc-slider::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 3px;
+  top: 3px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: 0.2s;
+}
+.mc-toggle input:checked + .mc-slider {
+  background: var(--accent-muted);
+}
+.mc-toggle input:checked + .mc-slider::before {
+  transform: translateX(16px);
+  background: var(--accent);
+}

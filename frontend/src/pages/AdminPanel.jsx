@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   getCompanies, createCompany, deleteCompany,
   getCompanyUsers, assignUserToCompany, removeUserFromCompany,
+  toggleMakerChecker,
 } from '../services/api';
 import './AdminPanel.css';
 
@@ -92,6 +93,20 @@ const AdminPanel = () => {
       await refreshUser();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleToggleMakerChecker = async (companyId, enabled) => {
+    setActionLoading('mc-' + companyId);
+    try {
+      await toggleMakerChecker(companyId, enabled);
+      await fetchCompanies();
+      await refreshUser();
+    } catch (err) {
+      setError(err.message);
+      await fetchCompanies();
     } finally {
       setActionLoading(null);
     }
@@ -294,6 +309,7 @@ const AdminPanel = () => {
               <th>Code</th>
               <th>Name</th>
               <th>Currency</th>
+              <th>Maker/Checker</th>
               <th>Users</th>
               <th>Actions</th>
             </tr>
@@ -305,6 +321,17 @@ const AdminPanel = () => {
                   <td className="mono text-sm" style={{ fontWeight: 600, color: 'var(--accent)' }}>{c.code}</td>
                   <td style={{ fontWeight: 500 }}>{c.name}</td>
                   <td className="text-muted text-sm">{c.currency}</td>
+                  <td>
+                    <label className="mc-toggle" title="Enable maker/checker (requires 2+ users)">
+                      <input
+                        type="checkbox"
+                        checked={c.maker_checker_enabled || false}
+                        onChange={() => handleToggleMakerChecker(c.id, !c.maker_checker_enabled)}
+                        disabled={actionLoading === 'mc-' + c.id}
+                      />
+                      <span className="mc-slider"></span>
+                    </label>
+                  </td>
                   <td className="text-sm">{c.user_count || 0}</td>
                   <td className="action-buttons">
                     <button className="btn-role" onClick={() => toggleCompanyExpand(c.id)} title="Manage users">

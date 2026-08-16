@@ -625,6 +625,7 @@ function DocumentPreview({ invoiceId }) {
 function InvoiceDetail({ invoiceId, onNavigate }) {
   const [inv, setInv] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { user, selectedCompany } = useAuth();
 
   useEffect(() => { getInvoice(invoiceId).then(setInv).catch(console.error).finally(() => setLoading(false)); }, [invoiceId]);
 
@@ -632,6 +633,9 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
 
   if (loading) return <Loading />;
   if (!inv) return <Empty text="Invoice not found" />;
+
+  const makerCheckerOn = selectedCompany?.maker_checker_enabled;
+  const canPost = !makerCheckerOn || !inv.approved_by || inv.approved_by !== user?.id;
 
   return (
     <div className="animate-fade-in space-y">
@@ -649,9 +653,24 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
           <button className="btn btn-blue" onClick={() => changeStatus('approved')}><Icons.Check /> Approve</button>
           <button className="btn btn-danger" onClick={() => changeStatus('rejected')}><Icons.X /> Reject</button>
         </>)}
-        {inv.status === 'approved' && <button className="btn btn-primary" onClick={() => changeStatus('posted')}>Post to GL</button>}
+        {inv.status === 'approved' && (
+          <button className="btn btn-primary" onClick={() => changeStatus('posted')} disabled={!canPost} title={!canPost ? 'Maker/checker: another user must post this invoice' : ''}>
+            Post to GL
+          </button>
+        )}
         {inv.status === 'posted' && <button className="btn btn-green" onClick={() => changeStatus('paid')}>Mark as Paid</button>}
       </div>
+      {makerCheckerOn && inv.status === 'approved' && !canPost && (
+        <div className="alert-info" style={{ fontSize: 13, padding: '10px 14px', borderRadius: 6, background: 'var(--amber-muted)', border: '1px solid var(--amber)', color: 'var(--amber)' }}>
+          Maker/checker is enabled. You approved this invoice, so another user must post it to the GL.
+        </div>
+      )}
+      {makerCheckerOn && (inv.approved_by || inv.posted_by) && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+          {inv.approved_by && inv.approved_by === user?.id && 'You approved this invoice. '}
+          {inv.posted_by && inv.posted_by === user?.id && 'You posted this invoice. '}
+        </div>
+      )}
 
       {inv.has_document && <DocumentPreview invoiceId={invoiceId} />}
 
@@ -736,6 +755,7 @@ function JournalEntries() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+  const { user, selectedCompany } = useAuth();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -777,7 +797,14 @@ function JournalEntries() {
             <div className="je-meta">
               <StatusBadge status={entry.status} />
               {entry.status === 'draft' && <button className="btn btn-primary btn-sm" onClick={() => postJournalEntry(entry.entry_id).then(load)}>Post</button>}
-              {entry.status === 'posted' && <button className="btn btn-danger btn-sm" onClick={() => { if (confirm('Create reversing entry?')) reverseJournalEntry(entry.entry_id).then(load); }}>Reverse</button>}
+              {entry.status === 'posted' && (
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={selectedCompany?.maker_checker_enabled && entry.posted_by === user?.id}
+                  title={selectedCompany?.maker_checker_enabled && entry.posted_by === user?.id ? 'Maker/checker: another user must reverse this entry' : ''}
+                  onClick={() => { if (confirm('Create reversing entry?')) reverseJournalEntry(entry.entry_id).then(load); }}
+                >Reverse</button>
+              )}
             </div>
           </div>
           <table className="data-table">

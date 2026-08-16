@@ -151,6 +151,8 @@ export const assignUserToCompany = (companyId, userId) =>
   apiRequest(`/auth/admin/companies/${companyId}/users/${userId}`, { method: 'POST' });
 export const removeUserFromCompany = (companyId, userId) =>
   apiRequest(`/auth/admin/companies/${companyId}/users/${userId}`, { method: 'DELETE' });
+export const toggleMakerChecker = (companyId, enabled) =>
+  apiRequest(`/auth/admin/companies/${companyId}/maker-checker`, { method: 'PUT', body: JSON.stringify({ enabled }) });
 
 // ─── Export (blob downloads) ────────────────────────────
 async function downloadBlob(endpoint, filename) {

@@ -69,6 +69,10 @@ class Invoice(Base):
     # Multi-company
     company_id = Column(String(50), index=True)
 
+    # Maker/checker
+    approved_by = Column(String(50))
+    posted_by = Column(String(50))
+
     # Relationships
     line_items = relationship("InvoiceLineItemDB", back_populates="invoice", cascade="all, delete-orphan")
     journal_entries = relationship("JournalEntryDB", back_populates="invoice", cascade="all, delete-orphan")
@@ -111,6 +115,10 @@ class JournalEntryDB(Base):
 
     # Multi-company
     company_id = Column(String(50), index=True)
+
+    # Maker/checker
+    approved_by = Column(String(50))
+    posted_by = Column(String(50))
 
     invoice = relationship("Invoice", back_populates="journal_entries")
     lines = relationship("JournalEntryLineDB", back_populates="journal_entry", cascade="all, delete-orphan")
@@ -199,6 +207,13 @@ def _migrate_business_db():
         if not column_exists(table, "company_id"):
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN company_id TEXT")
             logger.info(f"✅ Added company_id column to {table}")
+
+    # Add maker/checker columns to invoices and journal_entries
+    for table in ["invoices", "journal_entries"]:
+        for col in ["approved_by", "posted_by"]:
+            if not column_exists(table, col):
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+                logger.info(f"✅ Added {col} column to {table}")
 
     conn.commit()
 

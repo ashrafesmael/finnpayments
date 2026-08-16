@@ -326,7 +326,12 @@ async def get_invoice(invoice_id: str, company: dict = Depends(get_current_compa
 
 
 @app.patch("/invoices/{invoice_id}/status")
-async def update_invoice_status(invoice_id: str, status: str, company: dict = Depends(get_current_company)):
+async def update_invoice_status(
+    invoice_id: str,
+    status: str,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
     """Update invoice status (approve, reject, post, etc.)"""
     valid_statuses = [s.value for s in InvoiceStatus]
     if status not in valid_statuses:
@@ -338,6 +343,23 @@ async def update_invoice_status(invoice_id: str, status: str, company: dict = De
             raise HTTPException(status_code=404, detail="Invoice not found")
         
         old_status = invoice.status
+
+        # Maker/checker: the user who approved cannot also post
+        if status == "posted" and company.get('maker_checker_enabled'):
+            if invoice.approved_by and invoice.approved_by == user['id']:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Maker/checker: You approved this invoice and cannot post it. Another user must post it."
+                )
+
+        # Track who approved
+        if status == "approved":
+            invoice.approved_by = user['id']
+
+        # Track who posted
+        if status == "posted":
+            invoice.posted_by = user['id']
+
         invoice.status = status
         invoice.updated_at = datetime.utcnow()
         
@@ -345,6 +367,7 @@ async def update_invoice_status(invoice_id: str, status: str, company: dict = De
         if status == "posted":
             for je in invoice.journal_entries:
                 je.status = "posted"
+                je.posted_by = user['id']
         
         db.commit()
         
@@ -851,6 +874,7 @@ async def list_journal_entries(
                     "is_balanced": e.is_balanced,
                     "status": e.status,
                     "currency": e.invoice.currency if e.invoice else "MUR",
+                    "posted_by": e.posted_by,
                     "created_at": e.created_at.isoformat() if e.created_at else None,
                     "lines": [
                         {
@@ -869,7 +893,11 @@ async def list_journal_entries(
 
 
 @app.post("/accounting/entries/{entry_id}/post")
-async def post_journal_entry(entry_id: str, company: dict = Depends(get_current_company)):
+async def post_journal_entry(
+    entry_id: str,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
     """Post a journal entry (make it permanent)"""
     with get_db() as db:
         entry = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id, JournalEntryDB.company_id == company['id']).first()
@@ -879,6 +907,14 @@ async def post_journal_entry(entry_id: str, company: dict = Depends(get_current_
         if entry.status == "posted":
             raise HTTPException(status_code=400, detail="Entry already posted")
         
+        # Maker/checker: the user who approved the invoice cannot post the entry
+        if company.get('maker_checker_enabled') and entry.invoice:
+            if entry.invoice.approved_by and entry.invoice.approved_by == user['id']:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Maker/checker: You approved this invoice and cannot post the journal entry. Another user must post it."
+                )
+
         # Validate before posting
         entry_dict = {
             "lines": [
@@ -891,19 +927,32 @@ async def post_journal_entry(entry_id: str, company: dict = Depends(get_current_
             raise HTTPException(status_code=400, detail=f"Validation failed: {validation['issues']}")
         
         entry.status = "posted"
+        entry.posted_by = user['id']
         db.commit()
         
         return {"entry_id": entry_id, "status": "posted", "message": "Journal entry posted successfully"}
 
 
 @app.post("/accounting/entries/{entry_id}/reverse")
-async def reverse_journal_entry(entry_id: str, company: dict = Depends(get_current_company)):
+async def reverse_journal_entry(
+    entry_id: str,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
     """Create a reversing entry"""
     with get_db() as db:
         original = db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == entry_id, JournalEntryDB.company_id == company['id']).first()
         if not original:
             raise HTTPException(status_code=404, detail="Journal entry not found")
         
+        # Maker/checker: the user who posted cannot reverse
+        if company.get('maker_checker_enabled'):
+            if original.posted_by and original.posted_by == user['id']:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Maker/checker: You posted this entry and cannot reverse it. Another user must reverse it."
+                )
+
         from src.invoice_engine import generate_entry_id
         reversal_id = generate_entry_id()
         
@@ -1362,6 +1411,8 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "project_code": invoice.project_code,
         "cost_center": invoice.cost_center,
         "confidence_score": invoice.confidence_score,
+        "approved_by": invoice.approved_by,
+        "posted_by": invoice.posted_by,
         "created_at": invoice.created_at.isoformat() if invoice.created_at else None,
         "updated_at": invoice.updated_at.isoformat() if invoice.updated_at else None,
         "has_document": bool(invoice.source_file and Path(invoice.source_file).exists()),
