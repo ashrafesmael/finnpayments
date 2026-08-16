@@ -5,6 +5,7 @@ import {
   updateInvoiceStatus, deleteInvoice, getJournalEntries,
   postJournalEntry, reverseJournalEntry, getChartOfAccounts, checkHealth,
   exportJournalEntriesExcel,
+  exportJournalEntriesSage200,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
@@ -731,10 +732,16 @@ function JournalEntries() {
     <div className="animate-fade-in space-y">
       <div className="page-header">
         <h2>Journal Entries</h2>
-        <button className="btn btn-primary" onClick={async () => {
-          try { await exportJournalEntriesExcel(filter || 'posted'); }
-          catch (e) { alert(e.message); }
-        }}><Icons.Download /> Export to Excel</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn" onClick={async () => {
+            try { await exportJournalEntriesSage200(filter || 'posted'); }
+            catch (e) { alert(e.message); }
+          }}>Export to Sage 200</button>
+          <button className="btn btn-primary" onClick={async () => {
+            try { await exportJournalEntriesExcel(filter || 'posted'); }
+            catch (e) { alert(e.message); }
+          }}><Icons.Download /> Export to Excel</button>
+        </div>
       </div>
       <div className="filter-bar">
         {['', 'draft', 'posted', 'reversed'].map(s => (

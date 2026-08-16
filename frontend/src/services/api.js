@@ -98,6 +98,25 @@ export const exportJournalEntriesExcel = async (status = 'posted') => {
   window.URL.revokeObjectURL(downloadUrl);
 };
 
+export const exportJournalEntriesSage200 = async (status = 'posted', transactionType = 'JL') => {
+  const API_BASE2 = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  const url = `${API_BASE2}/accounting/export/sage200?status=${status}&transaction_type=${transactionType}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Export failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = `Sage200_GL_Journal_${status}_${transactionType}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+};
+
 // ─── Document Viewer ─────────────────────────────────────
 export const getInvoiceDocumentUrl = (invoiceId) => {
   const base = import.meta.env.VITE_API_URL || 'http://localhost:8001';

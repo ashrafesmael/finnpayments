@@ -1188,6 +1188,100 @@ async def export_journal_entries_excel(
             filename=filename
         )
 
+@app.get("/accounting/export/sage200")
+async def export_journal_entries_sage200(
+    status: Optional[str] = "posted",
+    transaction_type: str = "JL",
+):
+    """Export journal entries as a Sage 200 Evolution GL Journal Batch CSV.
+
+    Produces a single consolidated CSV file ready for import via:
+    General Ledger | Transactions | Journal Batches | New Batch | Batch | Import
+
+    Query params:
+        status           - entry status filter (default 'posted')
+        transaction_type - Sage Transaction Type code (default 'JL'; adjust to
+                           match the customer's Transaction Types under
+                           Maintenance | Maintenance | Transaction Types)
+    """
+    import csv
+    import tempfile
+    import re
+
+    def clean_text(value: str, max_len: int = 100) -> str:
+        """Strip Sage-illegal characters and whitespace."""
+        if not value:
+            return ""
+        value = str(value).strip()
+        value = re.sub(r"[,;:'\"<>*&$@/\\()]", "", value)
+        value = re.sub(r"\s+", " ", value)
+        return value[:max_len]
+
+    def format_date(date_str: str) -> str:
+        """Convert YYYY-MM-DD (or similar) to dd/mm/yyyy for Sage."""
+        if not date_str:
+            return ""
+        try:
+            dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
+        except (ValueError, TypeError):
+            return date_str
+
+    def fmt_amount(value: float) -> str:
+        """Format to 2 decimal places, no thousands separator."""
+        return f"{float(value or 0):.2f}"
+
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, suffix=".csv", dir="temp_uploads", mode="w", newline="", encoding="utf-8"
+    )
+    writer = csv.writer(tmp)
+
+    # Header row — Sage 200 Evolution GL Journal Batch minimum columns
+    writer.writerow([
+        "Date",
+        "AccountCode",
+        "TransactionType",
+        "Reference",
+        "Description",
+        "Debit",
+        "Credit",
+    ])
+
+    with get_db() as db:
+        query = db.query(JournalEntryDB).order_by(
+            JournalEntryDB.entry_date.asc(), JournalEntryDB.created_at.asc()
+        )
+        if status:
+            query = query.filter(JournalEntryDB.status == status)
+        entries = query.all()
+
+        if not entries:
+            tmp.close()
+            os.unlink(tmp.name)
+            raise HTTPException(status_code=404, detail="No journal entries found to export")
+
+        for entry in entries:
+            ref = clean_text(entry.reference or (entry.invoice.invoice_number if entry.invoice else ""), 30)
+            for line in entry.lines:
+                writer.writerow([
+                    format_date(entry.entry_date),
+                    clean_text(line.account_code, 20),
+                    transaction_type,
+                    ref,
+                    clean_text(line.description or "", 100),
+                    fmt_amount(line.debit),
+                    fmt_amount(line.credit),
+                ])
+
+    tmp.close()
+
+    filename = f"Sage200_GL_Journal_{status or 'all'}_{transaction_type}_{datetime.now().strftime('%Y%m%d')}.csv"
+    return FileResponse(
+        tmp.name,
+        media_type="text/csv",
+        filename=filename,
+    )
+
 @app.get("/accounting/suggest-account")
 async def suggest_account(description: str, type: str = "supplier"):
     """AI-powered account code suggestion"""
