@@ -33,6 +33,7 @@ from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
     generate_accounting_entries, validate_journal_entry, suggest_account_code
 )
+from src.auth_api import router as auth_router
 
 logger = logging.getLogger("FinnPayments.API")
 
@@ -70,6 +71,9 @@ except:
 
 # In-memory results store (mirrors FinnVerify pattern)
 results_store: Dict[str, Dict] = {}
+
+# ─── Authentication router ───────────────────────────────
+app.include_router(auth_router)
 
 
 # ─── Startup ──────────────────────────────────────────────

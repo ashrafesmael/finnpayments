@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import {
   getDashboardStats, getInvoices, getInvoice, uploadInvoice,
   updateInvoiceStatus, deleteInvoice, getJournalEntries,
@@ -9,6 +10,10 @@ import {
   reclassifyInvoice,
   getClassificationRules, deleteClassificationRule, resetAllData
 } from './services/api.js';
+import { useAuth } from './context/AuthContext';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import AdminPanel from './pages/AdminPanel';
 
 /* ─── Icons (inline SVG) ────────────────────────────── */
 const Icons = {
@@ -31,6 +36,8 @@ const Icons = {
   Sun: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
   Moon: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>,
   Refresh: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><polyline points="23,4 23,10 17,10"/><polyline points="1,20 1,14 7,14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>,
+  Users: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>,
+  LogOut: () => <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
 };
 
 /* ─── Helpers ────────────────────────────────────────── */
@@ -53,7 +60,7 @@ const Empty = ({ text }) => <div className="empty-state">{text || 'No data found
 /* ═══════════════════════════════════════════════════════
    SIDEBAR
    ═══════════════════════════════════════════════════════ */
-function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting }) {
+function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting, user, onLogout, isAdmin }) {
   const items = [
     { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
     { id: 'upload', label: 'Upload Invoice', icon: Icons.Upload },
@@ -61,6 +68,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'entries', label: 'Journal Entries', icon: Icons.Book },
     { id: 'accounts', label: 'Chart of Accounts', icon: Icons.List },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
+    ...(isAdmin ? [{ id: 'admin', label: 'User Management', icon: Icons.Users }] : []),
   ];
 
   return (
@@ -93,6 +101,16 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
         <div className={`status-dot ${health ? 'online' : 'offline'}`} />
         API {health ? 'Connected' : 'Offline'}
       </div>
+      {user && (
+        <div className="sidebar-user">
+          <div className="sidebar-user-avatar">{user.full_name?.charAt(0)?.toUpperCase() || 'U'}</div>
+          <div className="sidebar-user-info">
+            <div className="sidebar-user-name">{user.full_name}</div>
+            <div className="sidebar-user-role">{user.role}</div>
+          </div>
+          <button className="sidebar-logout" onClick={onLogout} title="Sign out"><Icons.LogOut /></button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -873,7 +891,10 @@ function ChartOfAccounts() {
 /* ═══════════════════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════════════════ */
-export default function App() {
+
+function AppLayout() {
+  const { user, logout, isAdmin } = useAuth();
+  const navigate = useNavigate();
   const [view, setView] = useState('dashboard');
   const [selectedId, setSelectedId] = useState(null);
   const [health, setHealth] = useState(false);
@@ -905,6 +926,11 @@ export default function App() {
     }
   };
 
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -915,6 +941,9 @@ export default function App() {
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onReset={handleReset}
         resetting={resetting}
+        user={user}
+        onLogout={handleLogout}
+        isAdmin={isAdmin()}
       />
       <main className="main-content">
         {view === 'dashboard' && <Dashboard onNavigate={nav} />}
@@ -924,7 +953,32 @@ export default function App() {
         {view === 'entries' && <JournalEntries />}
         {view === 'accounts' && <ChartOfAccounts />}
         {view === 'rules' && <LearnedRules />}
+        {view === 'admin' && isAdmin() && <AdminPanel />}
       </main>
     </div>
+  );
+}
+
+const ProtectedRoute = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) return <div className="auth-loading">Loading...</div>;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return children;
+};
+
+const PublicRoute = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) return <div className="auth-loading">Loading...</div>;
+  if (isAuthenticated) return <Navigate to="/" replace />;
+  return children;
+};
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+      <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+      <Route path="/*" element={<ProtectedRoute><AppLayout /></ProtectedRoute>} />
+    </Routes>
   );
 }

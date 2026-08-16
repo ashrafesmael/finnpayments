@@ -136,6 +136,27 @@ body {
 .sidebar-footer-btn:disabled { cursor: not-allowed; opacity: 0.6; }
 
 .spinning { animation: spin 0.7s linear infinite; }
+
+.sidebar-user {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  border-top: 1px solid var(--border); background: var(--bg-sidebar);
+}
+.sidebar-user-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-muted); color: var(--accent); font-weight: 600; font-size: 14px;
+}
+.sidebar-user-info { flex: 1; min-width: 0; }
+.sidebar-user-name {
+  font-size: 13px; font-weight: 500; color: var(--text-white);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sidebar-user-role { font-size: 11px; color: var(--text-muted); text-transform: capitalize; }
+.sidebar-logout {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  padding: 6px; border-radius: 6px; display: flex; align-items: center; transition: all var(--transition);
+}
+.sidebar-logout:hover { background: var(--red-muted); color: var(--red); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .status-dot.online { background: var(--accent); animation: pulseGlow 2s infinite; }
 .status-dot.offline { background: var(--red); }

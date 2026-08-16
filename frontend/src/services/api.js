@@ -1,14 +1,26 @@
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+function authToken() {
+  return localStorage.getItem('auth_token');
+}
+
 async function apiRequest(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
+  const token = authToken();
   const response = await fetch(url, {
     ...options,
     headers: {
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       ...options.headers,
     },
   });
+  if (response.status === 401) {
+    localStorage.removeItem('auth_token');
+    if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+      window.location.href = '/login';
+    }
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `API Error: ${response.status}`);

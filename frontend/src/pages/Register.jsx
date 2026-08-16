@@ -56,8 +56,8 @@ const Register = () => {
     <div className="login-container">
       <div className="login-box">
         <div className="login-header">
-          <h1>finnverify</h1>
-          <p>Anti-Money Laundering Screening System</p>
+          <h1>finnpayments</h1>
+          <p>AI Invoice Processing & Accounting</p>
         </div>
         
         <form onSubmit={handleSubmit} className="login-form">
