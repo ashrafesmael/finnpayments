@@ -1,24 +1,33 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { Link } from 'react-router-dom';
 import './Login.css';
 
-const Login = () => {
+const ForgotPassword = () => {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
-  const navigate = useNavigate();
+
+  const API_URL = import.meta.env.VITE_API_URL || '';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccess('');
     setLoading(true);
 
     try {
-      await login(email, password);
-      navigate('/');
+      const response = await fetch(API_URL + '/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'Request failed');
+      }
+      setSuccess('If an account exists for that email, a password reset link has been sent. Please check your inbox.');
+      setEmail('');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -33,12 +42,13 @@ const Login = () => {
           <h1>finnpayments</h1>
           <p>AI Invoice Processing & Accounting</p>
         </div>
-        
+
         <form onSubmit={handleSubmit} className="login-form">
-          <h2>Sign In</h2>
-          
+          <h2>Forgot Password</h2>
+
           {error && <div className="error-message">{error}</div>}
-          
+          {success && <div className="success-message">{success}</div>}
+
           <div className="form-group">
             <label htmlFor="email">Email</label>
             <input
@@ -50,34 +60,18 @@ const Login = () => {
               required
             />
           </div>
-          
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter your password"
-              required
-            />
-          </div>
 
-          <div style={{ textAlign: 'right', marginBottom: '10px' }}>
-            <Link to="/forgot-password" style={{ fontSize: '0.85rem', color: 'var(--accent)' }}>Forgot password?</Link>
-          </div>
-          
           <button type="submit" className="login-button" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Sending...' : 'Send Reset Link'}
           </button>
         </form>
-        
+
         <div className="login-footer">
-          <p>Don't have an account? <Link to="/register">Register here</Link></p>
+          <p><Link to="/login">← Back to Sign In</Link></p>
         </div>
       </div>
     </div>
   );
 };
 
-export default Login;
+export default ForgotPassword;

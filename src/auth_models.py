@@ -129,6 +129,18 @@ class AuthDatabase:
             )
         ''')
         
+        # Password reset tokens
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                token TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         
@@ -556,6 +568,66 @@ class AuthDatabase:
         conn.commit()
         conn.close()
         return success
+
+    # ─── Password Reset ───────────────────────────────────
+    
+    def create_password_reset_token(self, user_id: str) -> str:
+        """Create a password reset token (valid for 1 hour)."""
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(hours=1)
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO password_reset_tokens (token, user_id, created_at, expires_at, used)
+            VALUES (?, ?, ?, ?, 0)
+        ''', (token, user_id, datetime.utcnow().isoformat(), expires_at.isoformat()))
+        conn.commit()
+        conn.close()
+        return token
+    
+    def validate_password_reset_token(self, token: str) -> Optional[dict]:
+        """Validate a password reset token. Returns the user if valid."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT t.user_id, u.email, u.full_name FROM password_reset_tokens t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.token = ? AND t.used = 0 AND t.expires_at > ?
+        ''', (token, datetime.utcnow().isoformat()))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def reset_password(self, token: str, new_password: str) -> Optional[dict]:
+        """Reset a user's password using a valid token. Returns user dict on success."""
+        user_info = self.validate_password_reset_token(token)
+        if not user_info:
+            return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (self._hash_password(new_password), user_info['user_id'])
+        )
+        cursor.execute(
+            "UPDATE password_reset_tokens SET used = 1 WHERE token = ?",
+            (token,)
+        )
+        # Invalidate all sessions for this user (force re-login)
+        cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_info['user_id'],))
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ Password reset for {user_info['email']}")
+        return user_info
+    
+    def get_user_by_email(self, email: str) -> Optional[dict]:
+        """Get user by email."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email.lower(),))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
 
 # Global auth database instance
 auth_db = AuthDatabase()

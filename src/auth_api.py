@@ -4,6 +4,7 @@ Authentication API endpoints for finnpayments
 from fastapi import APIRouter, HTTPException, Depends, Header
 from typing import Optional, List
 from pydantic import BaseModel
+from pydantic import BaseModel
 from .auth_models import (
     auth_db, UserCreate, UserLogin, UserResponse,
     TokenResponse, UserApproval, UserRole, UserStatus, CompanyResponse
@@ -79,16 +80,51 @@ def get_current_company(
     return company
 
 
-@router.post("/register", response_model=dict)
-async def register(user_data: UserCreate):
-    """Register a new user (requires admin approval)"""
-    password = user_data.password
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+def _validate_password_strength(password: str):
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     if not any(c.isupper() for c in password):
         raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
     if not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?/~`" for c in password):
         raise HTTPException(status_code=400, detail="Password must contain at least one special character (!@#$%^&*etc)")
+
+
+@router.post("/forgot-password", response_model=dict)
+async def forgot_password(request: ForgotPasswordRequest):
+    """Request a password reset link. Always returns success (don't leak whether email exists)."""
+    user = auth_db.get_user_by_email(request.email)
+    if user and user['status'] == 'approved':
+        token = auth_db.create_password_reset_token(user['id'])
+        email_service.send_password_reset(user['email'], user['full_name'], token)
+        logger.info(f"📧 Password reset requested for {user['email']}")
+    else:
+        logger.info(f"📧 Password reset requested for unknown/disabled email: {request.email}")
+    return {"message": "If an account exists for that email, a password reset link has been sent."}
+
+
+@router.post("/reset-password", response_model=dict)
+async def reset_password(request: ResetPasswordRequest):
+    """Reset password using a valid token."""
+    _validate_password_strength(request.new_password)
+    user_info = auth_db.reset_password(request.token, request.new_password)
+    if not user_info:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    return {"message": "Password reset successfully. Please log in with your new password."}
+
+
+@router.post("/register", response_model=dict)
+async def register(user_data: UserCreate):
+    """Register a new user (requires admin approval)"""
+    _validate_password_strength(user_data.password)
 
     user = auth_db.create_user(
         email=user_data.email,

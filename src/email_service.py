@@ -192,5 +192,53 @@ class EmailService:
         """
         return self._send_email(to_email, subject, html_content)
 
+    def send_password_reset(self, to_email: str, full_name: str, reset_token: str, base_url: str = "") -> bool:
+        """Send password reset email with link."""
+        if not base_url:
+            base_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
+        reset_link = f"{base_url}/reset-password?token={reset_token}"
+        subject = "finnpayments - Password Reset"
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
+                .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 20px 0; }}
+                .note {{ background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 12px; border-radius: 8px; margin: 20px 0; font-size: 14px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
+                </div>
+                <div class="content">
+                    <h2>Dear {full_name},</h2>
+                    <p>A password reset was requested for your account. Click the button below to set a new password:</p>
+                    <div style="text-align: center;">
+                        <a href="{reset_link}" class="btn">Reset Password</a>
+                    </div>
+                    <div class="note">
+                        <strong>This link expires in 1 hour.</strong> If you did not request a password reset, you can safely ignore this email.
+                    </div>
+                    <p>If the button doesn't work, copy and paste this link into your browser:</p>
+                    <p style="word-break: break-all; color: #10b981; font-size: 13px;">{reset_link}</p>
+                    <p>Best regards,<br>finnpayments Team</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return self._send_email(to_email, subject, html_content)
+
 # Global email service instance
 email_service = EmailService()
