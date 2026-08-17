@@ -1,13 +1,12 @@
 # FinnPayments
 
-**Invoice Processing & Accounting Entries**  
-*A product of AlgoDynamix Ltd*
+**Invoice Processing & Accounting Entries**
 
 ---
 
 ## Overview
 
-FinnPayments is an AI-powered invoice processing system that extracts data from uploaded invoices and automatically generates double-entry accounting journal entries. Built on the same architecture as [FinnVerify](https://github.com/algodynamix/finnverify) (FastAPI + React/Vite), it provides:
+FinnPayments is an AI-powered invoice processing system that extracts data from uploaded invoices and automatically generates double-entry accounting journal entries. Built on the same architecture as FinnVerify (FastAPI + React/Vite), it provides:
 
 - **Invoice OCR & Extraction** — Upload PDF/image invoices, extract vendor details, line items, amounts
 - **AI Enhancement** — Groq LLM integration for intelligent data extraction and account code suggestion
@@ -157,10 +156,10 @@ FinnPayments shares FinnVerify's architecture:
 - SQLite database with SQLAlchemy ORM
 - systemd service deployment on n8n-enhanced server
 
-Both are part of the **Finn** product suite by AlgoDynamix Ltd:
+Both are part of the **Finn** product suite:
 - **FinnVerify** — AML/KYC screening & compliance
 - **FinnPayments** — Invoice processing & accounting entries
 
 ---
 
-*Built by AlgoDynamix Ltd · Powered by Groq AI*
+*Powered by Groq AI*

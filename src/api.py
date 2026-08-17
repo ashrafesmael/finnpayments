@@ -41,7 +41,7 @@ logger = logging.getLogger("FinnPayments.API")
 
 app = FastAPI(
     title="FinnPayments API",
-    description="Invoice Processing & Accounting Entries - A product of AlgoDynamix Ltd",
+    description="Invoice Processing & Accounting Entries",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -92,7 +92,7 @@ async def root():
     return {
         "message": "FinnPayments API",
         "product": "Invoice Processing & Accounting Entries",
-        "company": "AlgoDynamix Ltd",
+        "company": "FinnPayments",
         "version": "1.0.0",
         "status": "operational",
         "endpoints": {

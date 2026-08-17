@@ -80,7 +80,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
         <div className="sidebar-logo-icon">fp</div>
         <div className="sidebar-logo-text">
           <h1>finnpayments</h1>
-          <p>AlgoDynamix</p>
+          <p>Invoice Processing & Accounting</p>
         </div>
       </div>
       {companies && companies.length > 0 && (
