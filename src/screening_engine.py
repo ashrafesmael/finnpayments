@@ -438,7 +438,7 @@ Return ONLY a valid JSON object:
 Be conservative - only include countries you are confident are CURRENTLY on the lists based on the search results."""
 
             llm_response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="groq/compound",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=2048
@@ -749,7 +749,7 @@ Return a JSON object with:
 If no adverse media is known, return has_adverse_media: false with empty arrays."""
 
                     response = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
+                        model="groq/compound",
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1,
                         max_tokens=1024
@@ -1175,7 +1175,7 @@ Be thorough and base your assessment on factual information. If uncertain about 
 
             # Call Bedrock Claude with updated model
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="groq/compound",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=2048

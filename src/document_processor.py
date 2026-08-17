@@ -1160,7 +1160,7 @@ DOCUMENT CONTENT:
 IMPORTANT: Extract REAL data from the document. Return ONLY valid JSON."""
 
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="groq/compound",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=1024

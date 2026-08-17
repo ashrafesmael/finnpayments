@@ -481,7 +481,7 @@ Return ONLY valid JSON, no markdown formatting."""
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "groq/compound",
                     "messages": [
                         {"role": "system", "content": "You are an invoice data extraction specialist. Return only valid JSON."},
                         {"role": "user", "content": prompt}

@@ -618,7 +618,7 @@ Return ONLY valid JSON, no markdown."""
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": "llama-3.3-70b-versatile",
+                        "model": "groq/compound",
                         "messages": [
                             {"role": "system", "content": "You are an expert accountant. Return only valid JSON arrays."},
                             {"role": "user", "content": prompt}
