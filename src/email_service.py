@@ -3,7 +3,9 @@ Email Service for finnpayments Authentication
 """
 import smtplib
 import os
+import time
 import logging
+import httpx
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
@@ -20,31 +22,95 @@ class EmailService:
         self.smtp_password = os.getenv('SMTP_PASSWORD', '')
         self.from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
         self.from_name = os.getenv('SMTP_FROM_NAME', 'finnpayments')
-        self.enabled = bool(self.smtp_user and self.smtp_password)
-        
-        if not self.enabled:
-            logger.warning("⚠️ Email service not configured. Set SMTP_USER and SMTP_PASSWORD in .env")
-    
-    def _send_email(self, to_email: str, subject: str, html_content: str) -> bool:
-        """Send an email"""
+
+        # Microsoft Graph sending (preferred when configured): app-only OAuth,
+        # sends as MS_GRAPH_SENDER (e.g. no-reply@finnpact.com). No passwords, no
+        # SMTP AUTH, HTTPS only, DKIM-signed by M365 -> inbox. Falls back to SMTP.
+        self.graph_tenant = os.getenv('MS_GRAPH_TENANT_ID', '').strip()
+        self.graph_client = os.getenv('MS_GRAPH_CLIENT_ID', '').strip()
+        self.graph_secret = os.getenv('MS_GRAPH_CLIENT_SECRET', '').strip()
+        self.graph_sender = (os.getenv('MS_GRAPH_SENDER', '') or self.from_email or '').strip()
+        self.use_graph = bool(self.graph_tenant and self.graph_client and self.graph_secret and self.graph_sender)
+        self._graph_tok = None
+        self._graph_tok_exp = 0
+
+        self.enabled = self.use_graph or bool(self.smtp_user and self.smtp_password)
+
+        if self.use_graph:
+            logger.info(f"📧 Email via Microsoft Graph as {self.graph_sender}")
+        elif not self.enabled:
+            logger.warning("⚠️ Email service not configured. Set MS_GRAPH_* or SMTP_USER/SMTP_PASSWORD in .env")
+
+    def _graph_token(self) -> str:
+        """App-only OAuth token for Microsoft Graph (cached until ~1 min before expiry)."""
+        if self._graph_tok and time.time() < self._graph_tok_exp - 60:
+            return self._graph_tok
+        r = httpx.post(
+            f"https://login.microsoftonline.com/{self.graph_tenant}/oauth2/v2.0/token",
+            data={
+                "client_id": self.graph_client,
+                "client_secret": self.graph_secret,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "client_credentials",
+            },
+            timeout=20.0,
+        )
+        r.raise_for_status()
+        j = r.json()
+        self._graph_tok = j["access_token"]
+        self._graph_tok_exp = time.time() + int(j.get("expires_in", 3600))
+        return self._graph_tok
+
+    def _graph_send(self, to_email: str, subject: str, html_content: str,
+                    from_name: str = None) -> bool:
+        """Send via Microsoft Graph /sendMail as self.graph_sender."""
+        try:
+            token = self._graph_token()
+            message = {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": html_content},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
+            }
+            if from_name:
+                message["from"] = {"emailAddress": {"name": from_name, "address": self.graph_sender}}
+            r = httpx.post(
+                f"https://graph.microsoft.com/v1.0/users/{self.graph_sender}/sendMail",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"message": message, "saveToSentItems": False},
+                timeout=30.0,
+            )
+            if r.status_code in (200, 202):
+                logger.info(f"✅ Email sent (Graph): {subject} -> {to_email}")
+                return True
+            logger.error(f"❌ Graph sendMail failed [{r.status_code}]: {r.text[:400]}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Graph send error: {e}")
+            return False
+
+    def _send_email(self, to_email: str, subject: str, html_content: str, from_name: str = None) -> bool:
+        """Send an email. Optional from_name overrides the sender display name."""
         if not self.enabled:
             logger.info(f"📧 Email not sent (not configured): {subject} -> {to_email}")
             return False
-        
+
+        if self.use_graph:
+            return self._graph_send(to_email, subject, html_content, from_name=from_name)
+
         try:
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = f"{self.from_name} <{self.from_email}>"
+            msg['From'] = f"{from_name or self.from_name} <{self.from_email}>"
             msg['To'] = to_email
-            
+
             html_part = MIMEText(html_content, 'html')
             msg.attach(html_part)
-            
+
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
                 server.starttls()
                 server.login(self.smtp_user, self.smtp_password)
                 server.sendmail(self.from_email, to_email, msg.as_string())
-            
+
             logger.info(f"✅ Email sent: {subject} -> {to_email}")
             return True
         except Exception as e:
