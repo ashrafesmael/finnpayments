@@ -611,25 +611,31 @@ Return ONLY valid JSON, no markdown."""
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "openai/gpt-oss-120b",
-                        "messages": [
-                            {"role": "system", "content": "You are an expert accountant. Return only valid JSON arrays."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.1,
-                        "max_tokens": 1000
-                    }
-                )
+                models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+                response = None
+                for model in models:
+                    response = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": "You are an expert accountant. Return only valid JSON arrays."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "temperature": 0.1,
+                            "max_tokens": 1000
+                        }
+                    )
+                    if response.status_code == 200:
+                        break
+                    logger.warning(f"⚠️ Reclassify model {model} returned {response.status_code}, trying fallback...")
 
-                if response.status_code != 200:
-                    raise HTTPException(status_code=502, detail=f"AI service error: {response.status_code}")
+                if not response or response.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"AI service error: {response.status_code if response else 'no response'}")
 
                 import re as re_mod
                 result = response.json()

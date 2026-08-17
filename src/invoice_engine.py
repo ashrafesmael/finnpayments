@@ -474,24 +474,30 @@ Return a JSON object with these fields (use null for missing data):
 Return ONLY valid JSON, no markdown formatting."""
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "openai/gpt-oss-120b",
-                    "messages": [
-                        {"role": "system", "content": "You are an invoice data extraction specialist. Return only valid JSON."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 2000
-                }
-            )
+            models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+            response = None
+            for model in models:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": "You are an invoice data extraction specialist. Return only valid JSON."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 2000
+                    }
+                )
+                if response.status_code == 200:
+                    break
+                logger.warning(f"⚠️ Groq model {model} returned {response.status_code}, trying fallback...")
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 result = response.json()
                 content = result["choices"][0]["message"]["content"]
                 # Strip markdown code fences if present
