@@ -1,5 +1,5 @@
 """
-Email Service for finnverify Authentication
+Email Service for finnpayments Authentication
 """
 import smtplib
 import os
@@ -19,7 +19,7 @@ class EmailService:
         self.smtp_user = os.getenv('SMTP_USER', '')
         self.smtp_password = os.getenv('SMTP_PASSWORD', '')
         self.from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
-        self.from_name = os.getenv('SMTP_FROM_NAME', 'finnverify System')
+        self.from_name = os.getenv('SMTP_FROM_NAME', 'finnpayments')
         self.enabled = bool(self.smtp_user and self.smtp_password)
         
         if not self.enabled:
@@ -53,7 +53,7 @@ class EmailService:
     
     def send_registration_confirmation(self, to_email: str, full_name: str) -> bool:
         """Send registration confirmation email"""
-        subject = "finnverify - Registration Received"
+        subject = "finnpayments - Registration Received"
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -61,7 +61,7 @@ class EmailService:
             <style>
                 body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
                 .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
                 .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
                 .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
                 .status {{ background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 15px; border-radius: 8px; margin: 20px 0; }}
@@ -70,12 +70,12 @@ class EmailService:
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>finnverify</h1>
-                    <p>Anti-Money Laundering Screening System</p>
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
                 </div>
                 <div class="content">
                     <h2>Welcome, {full_name}!</h2>
-                    <p>Thank you for registering with finnverify. Your registration has been received successfully.</p>
+                    <p>Thank you for registering with finnpayments. Your registration has been received successfully.</p>
                     
                     <div class="status">
                         <strong>⏳ Account Status: Pending Approval</strong>
@@ -84,10 +84,10 @@ class EmailService:
                     
                     <p>This process typically takes 1-2 business days. If you have any questions, please contact your system administrator.</p>
                     
-                    <p>Best regards,<br>finnverify Team</p>
+                    <p>Best regards,<br>finnpayments Team</p>
                 </div>
                 <div class="footer">
-                    <p>This is an automated message from finnverify. Please do not reply to this email.</p>
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
                 </div>
             </div>
         </body>
@@ -97,7 +97,7 @@ class EmailService:
     
     def send_approval_notification(self, to_email: str, full_name: str, login_url: str = "") -> bool:
         """Send account approved notification"""
-        subject = "finnverify - Account Approved ✓"
+        subject = "finnpayments - Account Approved ✓"
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -105,41 +105,41 @@ class EmailService:
             <style>
                 body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
                 .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
                 .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
                 .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
                 .status {{ background: #dcfce7; border: 1px solid #22c55e; color: #166534; padding: 15px; border-radius: 8px; margin: 20px 0; }}
-                .button {{ display: inline-block; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; margin-top: 15px; }}
+                .button {{ display: inline-block; background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; margin-top: 15px; }}
             </style>
         </head>
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>finnverify</h1>
-                    <p>Anti-Money Laundering Screening System</p>
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
                 </div>
                 <div class="content">
                     <h2>Good news, {full_name}!</h2>
                     
                     <div class="status">
                         <strong>✅ Account Status: Approved</strong>
-                        <p>Your account has been approved by an administrator. You can now log in to access the finnverify system.</p>
+                        <p>Your account has been approved by an administrator. You can now log in to access the finnpayments system.</p>
                     </div>
                     
                     <p>You can now:</p>
                     <ul>
-                        <li>Screen individuals and organizations against sanctions lists</li>
-                        <li>Upload and analyze KYC documents</li>
-                        <li>Generate compliance reports</li>
-                        <li>Access the risk assessment dashboard</li>
+                        <li>Upload and process invoices with AI-powered extraction</li>
+                        <li>Generate double-entry accounting journal entries automatically</li>
+                        <li>Review and post journal entries to the general ledger</li>
+                        <li>Export entries to Sage 200 Evolution</li>
                     </ul>
                     
-                    {f'<p><a href="{login_url}" class="button">Login to finnverify</a></p>' if login_url else ''}
+                    {f'<p><a href="{login_url}" class="button">Login to finnpayments</a></p>' if login_url else ''}
                     
-                    <p>Best regards,<br>finnverify Team</p>
+                    <p>Best regards,<br>finnpayments Team</p>
                 </div>
                 <div class="footer">
-                    <p>This is an automated message from finnverify. Please do not reply to this email.</p>
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
                 </div>
             </div>
         </body>
@@ -149,7 +149,7 @@ class EmailService:
     
     def send_rejection_notification(self, to_email: str, full_name: str, reason: str = "") -> bool:
         """Send account rejected notification"""
-        subject = "finnverify - Account Registration Update"
+        subject = "finnpayments - Account Registration Update"
         reason_text = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
         html_content = f"""
         <!DOCTYPE html>
@@ -158,7 +158,7 @@ class EmailService:
             <style>
                 body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
                 .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
                 .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
                 .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
                 .status {{ background: #fee2e2; border: 1px solid #ef4444; color: #991b1b; padding: 15px; border-radius: 8px; margin: 20px 0; }}
@@ -167,8 +167,8 @@ class EmailService:
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>finnverify</h1>
-                    <p>Anti-Money Laundering Screening System</p>
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
                 </div>
                 <div class="content">
                     <h2>Dear {full_name},</h2>
@@ -181,10 +181,10 @@ class EmailService:
                     
                     <p>If you believe this decision was made in error, or if you have additional information to provide, please contact your system administrator.</p>
                     
-                    <p>Best regards,<br>finnverify Team</p>
+                    <p>Best regards,<br>finnpayments Team</p>
                 </div>
                 <div class="footer">
-                    <p>This is an automated message from finnverify. Please do not reply to this email.</p>
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
                 </div>
             </div>
         </body>

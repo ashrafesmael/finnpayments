@@ -52,7 +52,7 @@ const Dashboard = () => {
   return (
     <div className="dashboard">
       <div className="dashboard-header">
-        <h2>Welcome to finnverify</h2>
+        <h2>Welcome to finnpayments</h2>
         <p>Real-time Anti-Money Laundering Intelligence Platform</p>
       </div>
 

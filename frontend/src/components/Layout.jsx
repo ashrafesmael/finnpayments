@@ -35,7 +35,7 @@ const Layout = ({ children }) => {
         <div className="sidebar-header">
           <div className="logo">
             <ScanSearch size={32} />
-            {sidebarOpen && <span>finnverify</span>}
+            {sidebarOpen && <span>finnpayments</span>}
           </div>
         </div>
 
@@ -70,7 +70,7 @@ const Layout = ({ children }) => {
         <header className="header">
           <div className="header-content">
             <h1 className="page-title">
-              {menuItems.find(item => item.path === location.pathname)?.label || 'finnverify'}
+              {menuItems.find(item => item.path === location.pathname)?.label || 'finnpayments'}
             </h1>
             <div className="header-actions">
               <div className="status-badge">
@@ -89,7 +89,7 @@ const Layout = ({ children }) => {
 
         <footer className="footer">
           <div className="container">
-            <p>© 2025 finnverify | Enterprise Anti-Money Laundering Platform</p>
+            <p>© 2025 finnpayments | Enterprise AI Invoice Processing & Accounting</p>
           </div>
         </footer>
       </div>

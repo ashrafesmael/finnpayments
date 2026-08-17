@@ -1,5 +1,5 @@
 """
-Authentication models and database for finnverify
+Authentication models and database for finnpayments
 """
 import uuid
 import hashlib

@@ -21,7 +21,7 @@ const Navbar = () => {
       <div className="navbar-brand">
         <Link to="/">
           <span className="brand-icon">◈</span>
-          <span className="brand-text">finnverify</span>
+          <span className="brand-text">finnpayments</span>
         </Link>
       </div>
       
