@@ -618,7 +618,7 @@ Return ONLY valid JSON, no markdown."""
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": "groq/compound",
+                        "model": "openai/gpt-oss-120b",
                         "messages": [
                             {"role": "system", "content": "You are an expert accountant. Return only valid JSON arrays."},
                             {"role": "user", "content": prompt}
