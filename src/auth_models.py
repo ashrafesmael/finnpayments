@@ -3,6 +3,7 @@ Authentication models and database for finnpayments
 """
 import uuid
 import hashlib
+import hmac
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -13,6 +14,10 @@ import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+PBKDF2_ROUNDS = 600_000
+PBKDF2_SALT_BYTES = 16
+_LEGACY_GLOBAL_SALT = "vortex_aml_salt_2024"
 
 class UserRole(str, Enum):
     ADMIN = "admin"
@@ -153,10 +158,24 @@ class AuthDatabase:
         # Create default company if none exists
         self._create_default_company()
     
-    def _hash_password(self, password: str) -> str:
-        """Hash password with salt"""
-        salt = "vortex_aml_salt_2024"  # In production, use per-user salt
-        return hashlib.sha256(f"{password}{salt}".encode()).hexdigest()
+    def _hash_password(self, password: str, rounds: int = PBKDF2_ROUNDS) -> str:
+        """Hash password with PBKDF2-HMAC-SHA256 and per-user random salt."""
+        salt = secrets.token_bytes(PBKDF2_SALT_BYTES)
+        derived = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, rounds)
+        return f"pbkdf2_sha256${rounds}${salt.hex()}${derived.hex()}"
+
+    def _verify_password(self, password: str, stored: str) -> tuple:
+        """Verify a password against a stored hash. Returns (valid, needs_upgrade)."""
+        if stored.startswith("pbkdf2_sha256$"):
+            _, rounds_s, salt_hex, hash_hex = stored.split("$")
+            rounds = int(rounds_s)
+            derived = hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt_hex), rounds)
+            valid = hmac.compare_digest(derived.hex(), hash_hex)
+            return valid, valid and rounds < PBKDF2_ROUNDS
+        # Legacy bare SHA-256 digest
+        legacy_hash = hashlib.sha256(f"{password}{_LEGACY_GLOBAL_SALT}".encode()).hexdigest()
+        valid = hmac.compare_digest(legacy_hash, stored)
+        return valid, valid
     
     def _create_default_admin(self):
         """Create default admin account if no admin exists"""
@@ -432,20 +451,28 @@ class AuthDatabase:
         return user
     
     def authenticate_user(self, email: str, password: str) -> Optional[dict]:
-        """Authenticate user and return user data if valid"""
+        """Authenticate user and return user data if valid. Transparently upgrades legacy hashes."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT * FROM users WHERE email = ? AND password_hash = ?",
-            (email.lower(), self._hash_password(password))
-        )
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email.lower(),))
         row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return None
+        user = dict(row)
+        stored_hash = user.get('password_hash', '')
+        valid, needs_upgrade = self._verify_password(password, stored_hash)
+        if not valid:
+            conn.close()
+            return None
+        # Transparently upgrade legacy hash to PBKDF2
+        if needs_upgrade:
+            new_hash = self._hash_password(password)
+            cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user['id']))
+            conn.commit()
+            logger.info(f"🔄 Upgraded password hash for {email}")
         conn.close()
-        
-        if row:
-            return dict(row)
-        return None
+        return user
     
     def create_session(self, user_id: str, expires_hours: int = 24) -> str:
         """Create a new session token"""
