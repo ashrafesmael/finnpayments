@@ -14,10 +14,13 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel as PydanticBaseModel
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.models import (
     InvoiceStatus, InvoiceType, Currency,
@@ -47,6 +50,11 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS - allow frontend
 app.add_middleware(

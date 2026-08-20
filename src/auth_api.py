@@ -1,19 +1,21 @@
 """
 Authentication API endpoints for finnpayments
 """
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from typing import Optional, List
-from pydantic import BaseModel
 from pydantic import BaseModel
 from .auth_models import (
     auth_db, UserCreate, UserLogin, UserResponse,
     TokenResponse, UserApproval, UserRole, UserStatus, CompanyResponse
 )
 from .email_service import email_service
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import logging
 
 logger = logging.getLogger(__name__)
 
+limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
@@ -99,9 +101,10 @@ def _validate_password_strength(password: str):
 
 
 @router.post("/forgot-password", response_model=dict)
-async def forgot_password(request: ForgotPasswordRequest):
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, data: ForgotPasswordRequest):
     """Request a password reset link. Always returns success (don't leak whether email exists)."""
-    user = auth_db.get_user_by_email(request.email)
+    user = auth_db.get_user_by_email(data.email)
     if user and user['status'] == 'approved':
         token = auth_db.create_password_reset_token(user['id'])
         email_service.send_password_reset(user['email'], user['full_name'], token)
@@ -112,17 +115,19 @@ async def forgot_password(request: ForgotPasswordRequest):
 
 
 @router.post("/reset-password", response_model=dict)
-async def reset_password(request: ResetPasswordRequest):
+@limiter.limit("5/minute")
+async def reset_password(request: Request, data: ResetPasswordRequest):
     """Reset password using a valid token."""
-    _validate_password_strength(request.new_password)
-    user_info = auth_db.reset_password(request.token, request.new_password)
+    _validate_password_strength(data.new_password)
+    user_info = auth_db.reset_password(data.token, data.new_password)
     if not user_info:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
     return {"message": "Password reset successfully. Please log in with your new password."}
 
 
 @router.post("/register", response_model=dict)
-async def register(user_data: UserCreate):
+@limiter.limit("5/minute")
+async def register(request: Request, user_data: UserCreate):
     """Register a new user (requires admin approval)"""
     _validate_password_strength(user_data.password)
 
@@ -149,7 +154,8 @@ async def register(user_data: UserCreate):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
+@limiter.limit("10/minute")
+async def login(request: Request, credentials: UserLogin):
     """Login and get access token"""
     user = auth_db.authenticate_user(credentials.email, credentials.password)
 
