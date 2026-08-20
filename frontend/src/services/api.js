@@ -212,3 +212,20 @@ export const getClassificationRules = () => apiRequest('/accounting/classificati
 
 export const deleteClassificationRule = (ruleId) =>
   apiRequest(`/accounting/classification-rules/${ruleId}`, { method: 'DELETE' });
+
+// ─── TDS (Tax Deducted at Source) ───────────────────────
+export const getTdsRates = () => apiRequest('/tds/rates');
+export const createTdsRate = (data) => apiRequest('/tds/rates', { method: 'POST', body: JSON.stringify(data) });
+export const updateTdsRate = (id, data) => apiRequest(`/tds/rates/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteTdsRate = (id) => apiRequest(`/tds/rates/${id}`, { method: 'DELETE' });
+export const updateInvoiceTds = (invoiceId, tdsApplicable, tdsRate) =>
+  apiRequest(`/invoices/${invoiceId}/tds`, { method: 'PATCH', body: JSON.stringify({ tds_applicable: tdsApplicable, tds_rate: tdsRate }) });
+export const getTdsRegister = (startDate, endDate) => {
+  const params = {};
+  if (startDate) params.start_date = startDate;
+  if (endDate) params.end_date = endDate;
+  const query = new URLSearchParams(params).toString();
+  return apiRequest(`/tds/register${query ? '?' + query : ''}`);
+};
+export const markTdsRemitted = (invoiceId) =>
+  apiRequest(`/tds/mark-remitted?invoice_id=${invoiceId}`, { method: 'PATCH' });

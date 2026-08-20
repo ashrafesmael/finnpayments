@@ -384,15 +384,32 @@ async def enhance_with_ai(raw_text: str, regex_result: Dict[str, Any], company_i
         except Exception:
             learned_rules = ""
 
+        # Get TDS rates for LLM context
+        try:
+            from src.database import SessionLocal, TDSRate
+            tds_db = SessionLocal()
+            tds_rates = tds_db.query(TDSRate).filter(
+                TDSRate.company_id == company_id,
+                TDSRate.is_active == True
+            ).all() if company_id else []
+            tds_db.close()
+            tds_context = "\nTDS RATES (determine if tax should be deducted at source):\n" + "\n".join(
+                f"  {r.payment_type}: {r.rate}%" for r in tds_rates
+            ) if tds_rates else ""
+        except Exception:
+            tds_context = ""
+
         prompt = f"""You are an expert invoice processing system for a Mauritian property development group.
 Analyze this invoice text and extract structured data. Correct any OCR errors.
 {learned_rules}
+{tds_context}
 
 IMPORTANT RULES:
 - Extract the substantive description of what was billed, not table column headers.
 - For DISBURSEMENT items, include what the disbursement was for.
 - For legal invoices, FEES description must include full case/matter details (party names, court references, case numbers).
 - For EVERY line item, assign the best matching GL account_code from the Chart of Accounts below. Use full context: the vendor name, nature of service, line description, and industry to determine the correct account. For example, a law firm invoice = Professional Fees, an IT vendor = ICT Expenses, a security company = Security Fees, an electricity bill = Electricity, etc.
+- Determine if TDS (Tax Deducted at Source) applies to this payment based on the nature of the service and the TDS rates above. Set tds_applicable=true and tds_rate to the matching rate if applicable, otherwise false and 0.
 
 CHART OF ACCOUNTS (assign the best account_code per line item):
 01-5100-04  Basic Salary_Admin
@@ -467,6 +484,8 @@ Return a JSON object with these fields (use null for missing data):
     "payment_terms": "Net 30 etc",
     "suggested_account_code": "Best GL account code for this expense",
     "suggested_cost_center": "If determinable",
+    "tds_applicable": false,
+    "tds_rate": 0.0,
     "confidence_score": 0.95,
     "notes": "Any observations about this invoice"
 }}

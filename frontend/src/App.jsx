@@ -6,6 +6,7 @@ import {
   postJournalEntry, reverseJournalEntry, getChartOfAccounts, checkHealth,
   exportJournalEntriesExcel,
   exportJournalEntriesSage200,
+  updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
@@ -71,6 +72,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'entries', label: 'Journal Entries', icon: Icons.Book },
     { id: 'accounts', label: 'Chart of Accounts', icon: Icons.List },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
+    { id: 'tds', label: 'TDS Register', icon: Icons.Dollar },
     ...(isAdmin ? [{ id: 'admin', label: 'User Management', icon: Icons.Users }] : []),
   ];
 
@@ -626,6 +628,44 @@ function DocumentPreview({ invoiceId }) {
   );
 }
 
+function TdsOverride({ invoice, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [applicable, setApplicable] = useState(invoice.tds_applicable || false);
+  const [rate, setRate] = useState(invoice.tds_rate || 0);
+
+  if (!editing) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: 'var(--text-muted)' }}>
+        <span>TDS: {invoice.tds_applicable ? `Yes (${invoice.tds_rate}%)` : 'Not applicable'}</span>
+        <button className="btn btn-sm" onClick={() => { setApplicable(invoice.tds_applicable || false); setRate(invoice.tds_rate || 0); setEditing(true); }}>Override TDS</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ padding: 16, borderColor: 'var(--border)', borderWidth: 1, borderStyle: 'solid' }}>
+      <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 14 }}>TDS Override</div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <input type="checkbox" checked={applicable} onChange={(e) => setApplicable(e.target.checked)} />
+          TDS Applicable
+        </label>
+        {applicable && (
+          <input
+            type="number" step="0.1" className="input" style={{ width: 80 }}
+            value={rate} onChange={(e) => setRate(parseFloat(e.target.value) || 0)}
+            placeholder="Rate %"
+          />
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary btn-sm" onClick={() => { onUpdate(applicable, rate); setEditing(false); }}>Save</button>
+          <button className="btn btn-sm" onClick={() => setEditing(false)}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InvoiceDetail({ invoiceId, onNavigate }) {
   const [inv, setInv] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -702,6 +742,38 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
           </div>
         </div>
       </div>
+
+      {/* TDS Section */}
+      {inv.tds_applicable && (
+        <div className="card" style={{ padding: 20, borderColor: 'var(--amber)', borderWidth: 1, borderStyle: 'solid' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Tax Deducted at Source (TDS)</h3>
+            <span className="badge" style={{ background: 'var(--amber-muted)', color: 'var(--amber)' }}>TDS @ {inv.tds_rate}%</span>
+          </div>
+          <div className="detail-grid">
+            <div className="detail-row"><span className="detail-label">Gross Amount</span><span className="detail-value">{fmtCurrency(inv.total_amount, inv.currency)}</span></div>
+            <div className="detail-row"><span className="detail-label">TDS Amount</span><span className="detail-value" style={{ color: 'var(--red)' }}>-{fmtCurrency(inv.tds_amount || (inv.total_amount * inv.tds_rate / 100), inv.currency)}</span></div>
+            <div className="detail-total">
+              <span className="detail-total-label">Net to Supplier</span>
+              <span className="detail-total-value" style={{ color: 'var(--accent)' }}>{fmtCurrency((inv.total_amount - (inv.tds_amount || inv.total_amount * inv.tds_rate / 100)), inv.currency)}</span>
+            </div>
+            <div className="detail-row">
+              <span className="detail-label">MRA Status</span>
+              <span className="detail-value">{inv.tds_paid_to_mra ? `Remitted ${inv.tds_paid_date || ''}` : 'Pending remittance'}</span>
+            </div>
+          </div>
+          {!inv.tds_paid_to_mra && inv.status === 'paid' && (
+            <button className="btn btn-sm" style={{ marginTop: 12, borderColor: 'var(--amber)', color: 'var(--amber)' }} onClick={() => { markTdsRemitted(inv.invoice_id).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message)); }}>
+              Mark TDS Remitted to MRA
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* TDS Override (only for admin, before payment) */}
+      {inv.status !== 'paid' && (
+        <TdsOverride invoice={inv} onUpdate={(tdsApplicable, tdsRate) => updateInvoiceTds(invoiceId, tdsApplicable, tdsRate).then(() => getInvoice(invoiceId).then(setInv))} />
+      )}
 
       {(inv.line_items || []).length > 0 && (
         <div className="card">
@@ -947,6 +1019,68 @@ function ChartOfAccounts() {
    MAIN APP
    ═══════════════════════════════════════════════════════ */
 
+function TdsRegister() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await getTdsRegister(startDate || undefined, endDate || undefined); setData(r); }
+    catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  }, [startDate, endDate]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return <Loading />;
+  if (!data || data.entries.length === 0) return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header"><h2>TDS Register</h2></div>
+      <Empty text="No TDS deductions found for this period" />
+    </div>
+  );
+
+  const s = data.summary;
+
+  return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header"><h2>TDS Register — {data.company}</h2></div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+        <input type="date" className="input" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+        <span className="text-muted">to</span>
+        <input type="date" className="input" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+      </div>
+      <div className="stats-grid">
+        <div className="stat-card"><div className="stat-card-header"><span className="stat-card-label">Deductions</span></div><div className="stat-card-value">{s.count}</div></div>
+        <div className="stat-card"><div className="stat-card-header"><span className="stat-card-label">Gross Paid</span></div><div className="stat-card-value">{fmtCurrency(s.total_gross)}</div></div>
+        <div className="stat-card" style={{ borderColor: 'var(--amber)' }}><div className="stat-card-header"><span className="stat-card-label">Total TDS</span></div><div className="stat-card-value amber">{fmtCurrency(s.total_tds)}</div></div>
+        <div className="stat-card"><div className="stat-card-header"><span className="stat-card-label">Net to Suppliers</span></div><div className="stat-card-value accent">{fmtCurrency(s.total_net)}</div></div>
+      </div>
+      <div className="card">
+        <table className="data-table">
+          <thead><tr><th>Date</th><th>Vendor</th><th>Invoice #</th><th>Gross</th><th>Rate</th><th>TDS Amount</th><th>Net Paid</th><th>MRA Status</th></tr></thead>
+          <tbody>
+            {data.entries.map((e, i) => (
+              <tr key={i}>
+                <td className="text-xs text-muted">{e.invoice_date}</td>
+                <td>{e.vendor_name}</td>
+                <td className="mono text-xs text-accent">{e.invoice_number}</td>
+                <td className="mono text-sm">{fmtCurrency(e.total_amount)}</td>
+                <td className="mono text-sm">{e.tds_rate}%</td>
+                <td className="mono text-sm" style={{ color: 'var(--red)' }}>{fmtCurrency(e.tds_amount)}</td>
+                <td className="mono text-sm" style={{ color: 'var(--accent)' }}>{fmtCurrency(e.net_amount)}</td>
+                <td>{e.tds_paid_to_mra ? <span className="badge badge-posted">Remitted</span> : <span className="badge badge-pending_review">Pending</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function AppLayout() {
   const { user, logout, isAdmin, selectedCompany, selectCompany } = useAuth();
   const navigate = useNavigate();
@@ -1033,6 +1167,7 @@ function AppLayout() {
         {view === 'entries' && <JournalEntries />}
         {view === 'accounts' && <ChartOfAccounts />}
         {view === 'rules' && <LearnedRules />}
+        {view === 'tds' && <TdsRegister />}
         {view === 'admin' && isAdmin() && <AdminPanel />}
       </main>
     </div>

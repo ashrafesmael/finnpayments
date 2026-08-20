@@ -73,6 +73,13 @@ class Invoice(Base):
     approved_by = Column(String(50))
     posted_by = Column(String(50))
 
+    # TDS (Tax Deducted at Source)
+    tds_applicable = Column(Boolean, default=False)
+    tds_rate = Column(Float, default=0.0)
+    tds_amount = Column(Float, default=0.0)
+    tds_paid_to_mra = Column(Boolean, default=False)
+    tds_paid_date = Column(String(20))
+
     # Relationships
     line_items = relationship("InvoiceLineItemDB", back_populates="invoice", cascade="all, delete-orphan")
     journal_entries = relationship("JournalEntryDB", back_populates="invoice", cascade="all, delete-orphan")
@@ -174,12 +181,30 @@ class ClassificationRule(Base):
     company_id = Column(String(50), index=True)
 
 
+class TDSRate(Base):
+    __tablename__ = "tds_rates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    payment_type = Column(String(100), nullable=False)
+    description = Column(Text)
+    rate = Column(Float, nullable=False)
+    threshold = Column(Float, default=0.0)
+    resident = Column(Boolean, default=True)
+    non_resident = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    company_id = Column(String(50), index=True)
+
+
 def init_db():
     """Create all tables, run migrations, and seed chart of accounts"""
     Base.metadata.create_all(bind=engine)
     logger.info("✅ Database tables created")
     _migrate_business_db()
     _seed_chart_of_accounts()
+    _seed_tds_rates()
 
 
 def _migrate_business_db():
@@ -214,6 +239,19 @@ def _migrate_business_db():
             if not column_exists(table, col):
                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
                 logger.info(f"✅ Added {col} column to {table}")
+
+    # Add TDS columns to invoices
+    tds_columns = [
+        ("tds_applicable", "INTEGER DEFAULT 0"),
+        ("tds_rate", "REAL DEFAULT 0.0"),
+        ("tds_amount", "REAL DEFAULT 0.0"),
+        ("tds_paid_to_mra", "INTEGER DEFAULT 0"),
+        ("tds_paid_date", "TEXT"),
+    ]
+    for col, coltype in tds_columns:
+        if not column_exists("invoices", col):
+            cursor.execute(f"ALTER TABLE invoices ADD COLUMN {col} {coltype}")
+            logger.info(f"✅ Added {col} column to invoices")
 
     conn.commit()
 
@@ -317,6 +355,53 @@ def _seed_chart_of_accounts():
     except Exception as e:
         db.rollback()
         logger.error(f"Error seeding accounts: {e}")
+    finally:
+        db.close()
+
+
+def _seed_tds_rates():
+    """Seed default Mauritian TDS rates if no rates exist for any company."""
+    from src.auth_models import auth_db
+    db = SessionLocal()
+    try:
+        if db.query(TDSRate).count() > 0:
+            return
+
+        companies = auth_db.get_companies()
+        if not companies:
+            return
+
+        default_rates = [
+            ("Professional Fees", "Legal, audit, consultancy, advisory services", 5.0, 0, True, True),
+            ("Rent", "Rental of property, land, buildings", 5.0, 0, True, True),
+            ("Interest", "Interest on loans, debentures, deposits", 15.0, 0, False, True),
+            ("Royalties", "Royalty payments for use of intellectual property", 15.0, 0, False, True),
+            ("Contractor Payments", "Construction, subcontracting, public works", 3.0, 0, True, True),
+            ("Transport", "Transport of goods, haulage, freight", 3.0, 0, True, True),
+            ("Security Services", "Security guarding, cash-in-transit", 3.0, 0, True, True),
+            ("Cleaning Services", "Cleaning, janitorial, pest control", 3.0, 0, True, True),
+            ("Catering", "Catering and food supply", 3.0, 0, True, True),
+            ("Management Fees", "Corporate management, administrative fees", 5.0, 0, True, True),
+        ]
+
+        for company in companies:
+            for payment_type, desc, rate, threshold, resident, non_resident in default_rates:
+                db.add(TDSRate(
+                    payment_type=payment_type,
+                    description=desc,
+                    rate=rate,
+                    threshold=threshold,
+                    resident=resident,
+                    non_resident=non_resident,
+                    is_active=True,
+                    company_id=company['id'],
+                ))
+
+        db.commit()
+        logger.info(f"✅ Seeded {len(default_rates)} TDS rates for {len(companies)} company(ies)")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error seeding TDS rates: {e}")
     finally:
         db.close()
 

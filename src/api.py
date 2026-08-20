@@ -27,7 +27,8 @@ from src.models import (
 )
 from src.database import (
     init_db, get_db, Invoice, InvoiceLineItemDB,
-    JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule
+    JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule,
+    TDSRate, SessionLocal
 )
 from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
@@ -368,6 +369,64 @@ async def update_invoice_status(
             for je in invoice.journal_entries:
                 je.status = "posted"
                 je.posted_by = user['id']
+
+        # If marking as paid and TDS applies, calculate TDS and generate payment entries
+        if status == "paid" and invoice.tds_applicable and invoice.tds_rate > 0:
+            tds_amount = round(invoice.total_amount * invoice.tds_rate / 100, 2)
+            invoice.tds_amount = tds_amount
+
+            # Generate TDS payment journal entry
+            from src.invoice_engine import generate_entry_id
+            from src.accounting_engine import ACCOUNT_MAPPINGS
+
+            mapping = ACCOUNT_MAPPINGS.get(invoice.invoice_type, ACCOUNT_MAPPINGS["supplier"])
+            payable_code, payable_name = mapping["payable"]
+            bank_code, bank_name = "01-3000-01", "Bank"
+            tds_code, tds_name = "01-3001-01", "TDS Payable (MRA)"
+
+            tds_entry_id = generate_entry_id()
+            tds_entry = JournalEntryDB(
+                entry_id=tds_entry_id,
+                invoice_id=invoice.invoice_id,
+                entry_date=datetime.now().strftime("%Y-%m-%d"),
+                reference=f"TDS-PAY-{invoice.invoice_number}",
+                description=f"TDS withholding on payment to {invoice.vendor_name}",
+                total_debit=invoice.total_amount,
+                total_credit=invoice.total_amount,
+                is_balanced=True,
+                status="posted",
+                created_by=user['email'],
+                posted_by=user['id'],
+                company_id=company['id'],
+            )
+            db.add(tds_entry)
+
+            # Dr Trade Creditors (gross), Cr TDS Payable (tax), Cr Bank (net)
+            db.add(JournalEntryLineDB(
+                entry_id=tds_entry_id,
+                account_code=payable_code,
+                account_name=payable_name,
+                description=f"Settlement of {invoice.invoice_number} - {invoice.vendor_name}",
+                debit=invoice.total_amount,
+                credit=0.0,
+            ))
+            db.add(JournalEntryLineDB(
+                entry_id=tds_entry_id,
+                account_code=tds_code,
+                account_name=tds_name,
+                description=f"TDS @ {invoice.tds_rate}% on {invoice.invoice_number}",
+                debit=0.0,
+                credit=tds_amount,
+            ))
+            db.add(JournalEntryLineDB(
+                entry_id=tds_entry_id,
+                account_code=bank_code,
+                account_name=bank_name,
+                description=f"Net payment to {invoice.vendor_name} for {invoice.invoice_number}",
+                debit=0.0,
+                credit=round(invoice.total_amount - tds_amount, 2),
+            ))
+            logger.info(f"📊 TDS entry generated: {tds_entry_id} (TDS: {tds_amount}, Net: {invoice.total_amount - tds_amount})")
         
         db.commit()
         
@@ -1007,6 +1066,198 @@ async def reverse_journal_entry(
         }
 
 
+# ─── TDS (Tax Deducted at Source) ────────────────────────
+
+class TDSRateCreate(PydanticBaseModel):
+    payment_type: str
+    description: Optional[str] = None
+    rate: float
+    threshold: float = 0.0
+    resident: bool = True
+    non_resident: bool = True
+
+
+@app.get("/tds/rates")
+async def list_tds_rates(company: dict = Depends(get_current_company)):
+    """List all TDS rates for the active company"""
+    with get_db() as db:
+        rates = db.query(TDSRate).filter(
+            TDSRate.company_id == company['id']
+        ).order_by(TDSRate.payment_type).all()
+        return {
+            "total": len(rates),
+            "rates": [
+                {
+                    "id": r.id,
+                    "payment_type": r.payment_type,
+                    "description": r.description,
+                    "rate": r.rate,
+                    "threshold": r.threshold,
+                    "resident": r.resident,
+                    "non_resident": r.non_resident,
+                    "is_active": r.is_active,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rates
+            ]
+        }
+
+
+@app.post("/tds/rates")
+async def create_tds_rate(rate_data: TDSRateCreate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Create a new TDS rate (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    with get_db() as db:
+        rate = TDSRate(
+            payment_type=rate_data.payment_type,
+            description=rate_data.description,
+            rate=rate_data.rate,
+            threshold=rate_data.threshold,
+            resident=rate_data.resident,
+            non_resident=rate_data.non_resident,
+            is_active=True,
+            company_id=company['id'],
+        )
+        db.add(rate)
+        db.commit()
+        return {"id": rate.id, "message": f"TDS rate created: {rate_data.payment_type} @ {rate_data.rate}%"}
+
+
+@app.put("/tds/rates/{rate_id}")
+async def update_tds_rate(rate_id: int, rate_data: TDSRateCreate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Update a TDS rate (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    with get_db() as db:
+        rate = db.query(TDSRate).filter(TDSRate.id == rate_id, TDSRate.company_id == company['id']).first()
+        if not rate:
+            raise HTTPException(status_code=404, detail="TDS rate not found")
+        rate.payment_type = rate_data.payment_type
+        rate.description = rate_data.description
+        rate.rate = rate_data.rate
+        rate.threshold = rate_data.threshold
+        rate.resident = rate_data.resident
+        rate.non_resident = rate_data.non_resident
+        rate.updated_at = datetime.utcnow()
+        db.commit()
+        return {"message": "TDS rate updated"}
+
+
+@app.delete("/tds/rates/{rate_id}")
+async def delete_tds_rate(rate_id: int, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Delete a TDS rate (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    with get_db() as db:
+        rate = db.query(TDSRate).filter(TDSRate.id == rate_id, TDSRate.company_id == company['id']).first()
+        if not rate:
+            raise HTTPException(status_code=404, detail="TDS rate not found")
+        db.delete(rate)
+        db.commit()
+        return {"message": "TDS rate deleted"}
+
+
+class TDSOverrideRequest(PydanticBaseModel):
+    tds_applicable: bool
+    tds_rate: float = 0.0
+
+
+@app.patch("/invoices/{invoice_id}/tds")
+async def update_invoice_tds(
+    invoice_id: str,
+    request: TDSOverrideRequest,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Override TDS settings on an invoice (before payment)"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status == "paid":
+            raise HTTPException(status_code=400, detail="Cannot modify TDS on a paid invoice")
+        invoice.tds_applicable = request.tds_applicable
+        invoice.tds_rate = request.tds_rate if request.tds_applicable else 0.0
+        invoice.updated_at = datetime.utcnow()
+        db.commit()
+        return {
+            "invoice_id": invoice_id,
+            "tds_applicable": invoice.tds_applicable,
+            "tds_rate": invoice.tds_rate,
+            "message": "TDS settings updated",
+        }
+
+
+@app.get("/tds/register")
+async def tds_register(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    company: dict = Depends(get_current_company),
+):
+    """TDS register — all TDS deducted in a period"""
+    with get_db() as db:
+        query = db.query(Invoice).filter(
+            Invoice.company_id == company['id'],
+            Invoice.tds_applicable == True,
+            Invoice.tds_amount > 0,
+        )
+        if start_date:
+            query = query.filter(Invoice.invoice_date >= start_date)
+        if end_date:
+            query = query.filter(Invoice.invoice_date <= end_date)
+        invoices = query.order_by(Invoice.invoice_date).all()
+
+        total_tds = sum(inv.tds_amount for inv in invoices)
+        total_gross = sum(inv.total_amount for inv in invoices)
+        total_net = total_gross - total_tds
+
+        return {
+            "company": company['name'],
+            "period": f"{start_date or 'all'} to {end_date or 'now'}",
+            "summary": {
+                "count": len(invoices),
+                "total_gross": round(total_gross, 2),
+                "total_tds": round(total_tds, 2),
+                "total_net": round(total_net, 2),
+            },
+            "entries": [
+                {
+                    "invoice_id": inv.invoice_id,
+                    "invoice_number": inv.invoice_number,
+                    "vendor_name": inv.vendor_name,
+                    "invoice_date": inv.invoice_date,
+                    "total_amount": inv.total_amount,
+                    "tds_rate": inv.tds_rate,
+                    "tds_amount": inv.tds_amount,
+                    "net_amount": round(inv.total_amount - inv.tds_amount, 2),
+                    "tds_paid_to_mra": inv.tds_paid_to_mra,
+                    "tds_paid_date": inv.tds_paid_date,
+                }
+                for inv in invoices
+            ],
+        }
+
+
+@app.patch("/tds/mark-remitted")
+async def mark_tds_remitted(
+    invoice_id: str,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Mark TDS as remitted to MRA"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not invoice.tds_applicable or invoice.tds_amount <= 0:
+            raise HTTPException(status_code=400, detail="This invoice has no TDS to remit")
+        invoice.tds_paid_to_mra = True
+        invoice.tds_paid_date = datetime.now().strftime("%Y-%m-%d")
+        db.commit()
+        return {"message": f"TDS for {invoice.invoice_number} marked as remitted to MRA"}
+
+
 # ─── Chart of Accounts ───────────────────────────────────
 
 
@@ -1426,6 +1677,11 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "confidence_score": invoice.confidence_score,
         "approved_by": invoice.approved_by,
         "posted_by": invoice.posted_by,
+        "tds_applicable": invoice.tds_applicable,
+        "tds_rate": invoice.tds_rate,
+        "tds_amount": invoice.tds_amount,
+        "tds_paid_to_mra": invoice.tds_paid_to_mra,
+        "tds_paid_date": invoice.tds_paid_date,
         "created_at": invoice.created_at.isoformat() if invoice.created_at else None,
         "updated_at": invoice.updated_at.isoformat() if invoice.updated_at else None,
         "has_document": bool(invoice.source_file and Path(invoice.source_file).exists()),
@@ -1463,6 +1719,8 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
             ai_analysis=json.dumps(extracted.get("ai_analysis")) if extracted.get("ai_analysis") else None,
             source_file=file_path,
             company_id=company_id,
+            tds_applicable=extracted.get("tds_applicable", False),
+            tds_rate=extracted.get("tds_rate", 0.0) if extracted.get("tds_applicable") else 0.0,
         )
         db.add(invoice)
         
