@@ -1,0 +1,10 @@
+[Unit]
+Description=FinnPayments daily database backup timer
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

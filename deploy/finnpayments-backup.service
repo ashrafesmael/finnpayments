@@ -1,0 +1,9 @@
+[Unit]
+Description=FinnPayments daily database backup
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/administrator/finnpayments/deploy/backup-db.py
+User=administrator
+Group=administrator
