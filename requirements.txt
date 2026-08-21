@@ -27,3 +27,5 @@ python-json-logger>=2.0.7
 # Additional utilities
 aiofiles>=23.2.0
 mangum>=0.17.0
+slowapi>=0.1.9
+httpx>=0.24.0

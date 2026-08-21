@@ -187,20 +187,25 @@ class AuthDatabase:
         
         if admin_count == 0:
             admin_id = str(uuid.uuid4())
+            admin_email = os.getenv('ADMIN_EMAIL', 'admin@montchoisy.com')
+            admin_password = os.getenv('ADMIN_PASSWORD') or secrets.token_urlsafe(16)
             cursor.execute('''
                 INSERT INTO users (id, email, password_hash, full_name, role, status, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 admin_id,
-                'admin@montchoisy.com',
-                self._hash_password('VortexAdmin2024!'),
+                admin_email,
+                self._hash_password(admin_password),
                 'System Administrator',
                 'admin',
                 'approved',
                 datetime.utcnow().isoformat()
             ))
             conn.commit()
-            logger.info(f"✅ Default admin account created: admin@montchoisy.com")
+            if os.getenv('ADMIN_PASSWORD'):
+                logger.info(f"✅ Default admin account created: {admin_email}")
+            else:
+                logger.info(f"✅ Default admin account created: {admin_email} (password: {admin_password})")
         
         conn.close()
     
