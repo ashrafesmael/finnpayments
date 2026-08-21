@@ -7,6 +7,7 @@ import {
   exportJournalEntriesExcel,
   exportJournalEntriesSage200,
   updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
+  getAuditLog,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
@@ -73,6 +74,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'accounts', label: 'Chart of Accounts', icon: Icons.List },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
     { id: 'tds', label: 'TDS Register', icon: Icons.Dollar },
+    ...(isAdmin ? [{ id: 'audit', label: 'Audit Log', icon: Icons.List }] : []),
     ...(isAdmin ? [{ id: 'admin', label: 'User Management', icon: Icons.Users }] : []),
   ];
 
@@ -1019,6 +1021,68 @@ function ChartOfAccounts() {
    MAIN APP
    ═══════════════════════════════════════════════════════ */
 
+function AuditLog() {
+  const [entries, setEntries] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [action, setAction] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await getAuditLog(action ? { action } : {}); setEntries(r.entries || []); setTotal(r.total || 0); }
+    catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  }, [action]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const actionColors = {
+    invoice_approved: 'badge-posted',
+    invoice_posted: 'badge-posted',
+    invoice_rejected: 'badge-rejected',
+    invoice_paid: 'badge-posted',
+    invoice_deleted: 'badge-rejected',
+    journal_posted: 'badge-posted',
+    journal_reversed: 'badge-rejected',
+    data_reset: 'badge-rejected',
+    tds_override: 'badge-pending_review',
+    tds_remitted: 'badge-posted',
+  };
+
+  return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header">
+        <h2>Audit Log <span className="count">({total})</span></h2>
+      </div>
+      <div className="filter-bar">
+        {['', 'invoice_approved', 'invoice_posted', 'invoice_paid', 'invoice_deleted', 'journal_posted', 'journal_reversed', 'data_reset', 'tds_override', 'tds_remitted'].map(a => (
+          <button key={a} className={`filter-pill ${action === a ? 'active' : ''}`} onClick={() => setAction(a)}>
+            {a ? a.replace(/_/g, ' ') : 'All'}
+          </button>
+        ))}
+      </div>
+      <div className="card">
+        {loading ? <Loading /> : (
+          <table className="data-table">
+            <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Description</th></tr></thead>
+            <tbody>
+              {entries.map((e, i) => (
+                <tr key={i}>
+                  <td className="text-xs text-muted">{e.timestamp ? new Date(e.timestamp).toLocaleString() : '-'}</td>
+                  <td className="text-sm">{e.user_email || '-'}</td>
+                  <td><span className={`badge ${actionColors[e.action] || 'badge-draft'}`}>{e.action.replace(/_/g, ' ')}</span></td>
+                  <td className="text-xs">{e.description || '-'}</td>
+                </tr>
+              ))}
+              {entries.length === 0 && <tr><td colSpan={4}><Empty text="No audit entries found" /></td></tr>}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TdsRegister() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1168,6 +1232,7 @@ function AppLayout() {
         {view === 'accounts' && <ChartOfAccounts />}
         {view === 'rules' && <LearnedRules />}
         {view === 'tds' && <TdsRegister />}
+        {view === 'audit' && isAdmin() && <AuditLog />}
         {view === 'admin' && isAdmin() && <AdminPanel />}
       </main>
     </div>

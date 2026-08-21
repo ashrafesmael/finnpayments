@@ -229,3 +229,9 @@ export const getTdsRegister = (startDate, endDate) => {
 };
 export const markTdsRemitted = (invoiceId) =>
   apiRequest(`/tds/mark-remitted?invoice_id=${invoiceId}`, { method: 'PATCH' });
+
+// ─── Audit Log ──────────────────────────────────────────
+export const getAuditLog = (params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return apiRequest(`/audit-log${query ? '?' + query : ''}`);
+};

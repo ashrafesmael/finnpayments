@@ -198,6 +198,21 @@ class TDSRate(Base):
     company_id = Column(String(50), index=True)
 
 
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    user_id = Column(String(50))
+    user_email = Column(String(255))
+    action = Column(String(50), nullable=False, index=True)
+    entity_type = Column(String(50))
+    entity_id = Column(String(100))
+    description = Column(Text)
+    company_id = Column(String(50), index=True)
+    ip_address = Column(String(45))
+
+
 def init_db():
     """Create all tables, run migrations, and seed chart of accounts"""
     Base.metadata.create_all(bind=engine)
