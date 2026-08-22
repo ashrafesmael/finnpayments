@@ -147,11 +147,35 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
 function Dashboard({ onNavigate }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState('all');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [showCustom, setShowCustom] = useState(false);
 
-  useEffect(() => { getDashboardStats().then(setStats).catch(console.error).finally(() => setLoading(false)); }, []);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const sd = period === 'custom' ? customStart : undefined;
+      const ed = period === 'custom' ? customEnd : undefined;
+      const r = await getDashboardStats(period, sd, ed);
+      setStats(r);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  }, [period, customStart, customEnd]);
+
+  useEffect(() => { load(); }, [load]);
 
   if (loading) return <Loading />;
   if (!stats) return <Empty text="Failed to load dashboard" />;
+
+  const periods = [
+    { id: 'all', label: 'All Time' },
+    { id: 'month', label: 'This Month' },
+    { id: 'last_month', label: 'Last Month' },
+    { id: 'quarter', label: 'This Quarter' },
+    { id: 'year', label: 'This Year' },
+    { id: 'custom', label: 'Custom' },
+  ];
 
   return (
     <div className="animate-fade-in space-y">
@@ -159,6 +183,22 @@ function Dashboard({ onNavigate }) {
         <h2>Dashboard</h2>
         <button className="btn btn-primary" onClick={() => onNavigate('upload')}>Upload Invoice</button>
       </div>
+
+      <div className="filter-bar">
+        {periods.map(p => (
+          <button key={p.id} className={`filter-pill ${period === p.id ? 'active' : ''}`} onClick={() => { setPeriod(p.id); setShowCustom(p.id === 'custom'); }}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {showCustom && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <input type="date" className="input" style={{ width: 160 }} value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+          <span className="text-muted">to</span>
+          <input type="date" className="input" style={{ width: 160 }} value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+          <button className="btn btn-sm btn-primary" onClick={load} disabled={!customStart || !customEnd}>Apply</button>
+        </div>
+      )}
 
       <div className="stats-grid">
         {[
@@ -179,7 +219,7 @@ function Dashboard({ onNavigate }) {
 
       <div className="card">
         <div className="card-header">
-          <h3>Recent Invoices</h3>
+          <h3>Recent Invoices {stats.start_date ? `(${stats.start_date} to ${stats.end_date})` : ''}</h3>
           <button className="link-btn" onClick={() => onNavigate('invoices')}>View All →</button>
         </div>
         <table className="data-table">
@@ -195,7 +235,7 @@ function Dashboard({ onNavigate }) {
               </tr>
             ))}
             {(!stats.recent_invoices || stats.recent_invoices.length === 0) && (
-              <tr><td colSpan={5}><Empty text="No invoices yet. Upload your first invoice to get started." /></td></tr>
+              <tr><td colSpan={5}><Empty text="No invoices in this period." /></td></tr>
             )}
           </tbody>
         </table>

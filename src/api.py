@@ -1720,32 +1720,76 @@ async def suggest_account(description: str, type: str = "supplier", company: dic
 # ─── Dashboard ────────────────────────────────────────────
 
 @app.get("/dashboard/stats")
-async def get_dashboard_stats(company: dict = Depends(get_current_company)):
-    """Get dashboard statistics"""
+async def get_dashboard_stats(
+    period: str = "all",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    company: dict = Depends(get_current_company),
+):
+    """Get dashboard statistics, optionally filtered by date range.
+
+    period presets: all, month, quarter, year, custom (requires start_date/end_date)
+    """
+    from datetime import date, timedelta
+
+    today = date.today()
+    if period == "month":
+        start_date = today.replace(day=1).isoformat()
+        end_date = today.isoformat()
+    elif period == "quarter":
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        start_date = today.replace(month=q_month, day=1).isoformat()
+        end_date = today.isoformat()
+    elif period == "year":
+        start_date = today.replace(month=1, day=1).isoformat()
+        end_date = today.isoformat()
+    elif period == "last_month":
+        first_of_this = today.replace(day=1)
+        last_month_end = first_of_this - timedelta(days=1)
+        start_date = last_month_end.replace(day=1).isoformat()
+        end_date = last_month_end.isoformat()
+    elif period == "custom":
+        if not start_date or not end_date:
+            raise HTTPException(status_code=400, detail="custom period requires start_date and end_date")
+
     with get_db() as db:
-        total = db.query(Invoice).filter(Invoice.company_id == company['id']).count()
-        pending = db.query(Invoice).filter(Invoice.company_id == company['id'], Invoice.status == "pending_review").count()
-        approved = db.query(Invoice).filter(Invoice.company_id == company['id'], Invoice.status == "approved").count()
-        posted = db.query(Invoice).filter(Invoice.company_id == company['id'], Invoice.status == "posted").count()
-        
-        # Totals by type
+        base_query = db.query(Invoice).filter(Invoice.company_id == company['id'])
+        if start_date:
+            base_query = base_query.filter(Invoice.invoice_date >= start_date)
+        if end_date:
+            base_query = base_query.filter(Invoice.invoice_date <= end_date)
+
+        total = base_query.count()
+        pending = base_query.filter(Invoice.status == "pending_review").count()
+        approved = base_query.filter(Invoice.status == "approved").count()
+        posted = base_query.filter(Invoice.status == "posted").count()
+
+        # Totals by type (only active statuses)
         from sqlalchemy import func
-        payable = db.query(func.sum(Invoice.total_amount)).filter(
-            Invoice.company_id == company['id'],
+        active_statuses = ["pending_review", "approved", "posted", "paid"]
+        payable_q = base_query.filter(
             Invoice.invoice_type == "supplier",
-            Invoice.status.in_(["pending_review", "approved", "posted"])
-        ).scalar() or 0.0
-        
-        receivable = db.query(func.sum(Invoice.total_amount)).filter(
-            Invoice.company_id == company['id'],
+            Invoice.status.in_(active_statuses)
+        )
+        receivable_q = base_query.filter(
             Invoice.invoice_type == "client",
-            Invoice.status.in_(["pending_review", "approved", "posted"])
-        ).scalar() or 0.0
-        
-        # Recent invoices
-        recent = db.query(Invoice).filter(Invoice.company_id == company['id']).order_by(Invoice.created_at.desc()).limit(10).all()
-        
+            Invoice.status.in_(active_statuses)
+        )
+        payable = payable_q.with_entities(func.sum(Invoice.total_amount)).scalar() or 0.0
+        receivable = receivable_q.with_entities(func.sum(Invoice.total_amount)).scalar() or 0.0
+
+        # Recent invoices (always show latest regardless of period for navigation)
+        recent_q = db.query(Invoice).filter(Invoice.company_id == company['id'])
+        if start_date:
+            recent_q = recent_q.filter(Invoice.invoice_date >= start_date)
+        if end_date:
+            recent_q = recent_q.filter(Invoice.invoice_date <= end_date)
+        recent = recent_q.order_by(Invoice.created_at.desc()).limit(10).all()
+
         return {
+            "period": period,
+            "start_date": start_date,
+            "end_date": end_date,
             "total_invoices": total,
             "pending_review": pending,
             "approved": approved,

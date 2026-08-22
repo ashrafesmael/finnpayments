@@ -87,7 +87,13 @@ export const authApi = {
 };
 
 // ─── Dashboard ──────────────────────────────────────────
-export const getDashboardStats = () => apiRequest('/dashboard/stats');
+export const getDashboardStats = (period = 'all', startDate, endDate) => {
+  const params = { period };
+  if (startDate) params.start_date = startDate;
+  if (endDate) params.end_date = endDate;
+  const query = new URLSearchParams(params).toString();
+  return apiRequest(`/dashboard/stats?${query}`);
+};
 
 // ─── Invoices ───────────────────────────────────────────
 export const getInvoices = (params = {}) => {
