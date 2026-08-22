@@ -251,3 +251,13 @@ export const linkInvoiceVendor = (invoiceId, vendorId) =>
   apiRequest(`/invoices/${invoiceId}/vendor`, { method: 'PATCH', body: JSON.stringify({ vendor_id: vendorId }) });
 export const unlinkInvoiceVendor = (invoiceId) =>
   apiRequest(`/invoices/${invoiceId}/vendor/unlink`, { method: 'PATCH' });
+
+// ─── Recurring Invoices ─────────────────────────────────
+export const getRecurringTemplates = () => apiRequest('/recurring/templates');
+export const createRecurringTemplate = (data) => apiRequest('/recurring/templates', { method: 'POST', body: JSON.stringify(data) });
+export const updateRecurringTemplate = (id, data) => apiRequest(`/recurring/templates/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteRecurringTemplate = (id) => apiRequest(`/recurring/templates/${id}`, { method: 'DELETE' });
+export const toggleRecurringTemplate = (id) => apiRequest(`/recurring/templates/${id}/toggle`, { method: 'PATCH' });
+export const generateRecurringNow = (id) => apiRequest(`/recurring/generate-now/${id}`, { method: 'POST' });
+export const toggleRecurringCompany = (companyId, enabled) =>
+  apiRequest(`/auth/admin/companies/${companyId}/recurring`, { method: 'PUT', body: JSON.stringify({ enabled }) });

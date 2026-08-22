@@ -44,6 +44,7 @@ class CompanyResponse(BaseModel):
     name: str
     currency: str = "MUR"
     maker_checker_enabled: bool = False
+    recurring_enabled: bool = False
     created_at: str
 
 class UserResponse(BaseModel):
@@ -118,6 +119,7 @@ class AuthDatabase:
                 name TEXT NOT NULL,
                 currency TEXT DEFAULT 'MUR',
                 maker_checker_enabled INTEGER DEFAULT 0,
+                recurring_enabled INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL
             )
         ''')
@@ -222,6 +224,11 @@ class AuthDatabase:
         if not column_exists("companies", "maker_checker_enabled"):
             cursor.execute("ALTER TABLE companies ADD COLUMN maker_checker_enabled INTEGER DEFAULT 0")
             logger.info("✅ Added maker_checker_enabled column to companies")
+        
+        # Add recurring_enabled to companies table for existing DBs
+        if not column_exists("companies", "recurring_enabled"):
+            cursor.execute("ALTER TABLE companies ADD COLUMN recurring_enabled INTEGER DEFAULT 0")
+            logger.info("✅ Added recurring_enabled column to companies")
         
         conn.commit()
         conn.close()
@@ -332,6 +339,8 @@ class AuthDatabase:
         """Normalize maker_checker_enabled from int to bool."""
         if 'maker_checker_enabled' in c:
             c['maker_checker_enabled'] = bool(c['maker_checker_enabled'])
+        if 'recurring_enabled' in c:
+            c['recurring_enabled'] = bool(c['recurring_enabled'])
         return c
     
     def assign_user_to_company(self, user_id: str, company_id: str) -> bool:
@@ -406,6 +415,19 @@ class AuthDatabase:
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE companies SET maker_checker_enabled = ? WHERE id = ?",
+            (1 if enabled else 0, company_id)
+        )
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def update_company_recurring(self, company_id: str, enabled: bool) -> bool:
+        """Enable or disable recurring invoices for a company."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE companies SET recurring_enabled = ? WHERE id = ?",
             (1 if enabled else 0, company_id)
         )
         success = cursor.rowcount > 0

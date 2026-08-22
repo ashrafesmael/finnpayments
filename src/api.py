@@ -31,7 +31,7 @@ from src.models import (
 from src.database import (
     init_db, get_db, Invoice, InvoiceLineItemDB,
     JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule,
-    TDSRate, SessionLocal, AuditLog, Vendor
+    TDSRate, SessionLocal, AuditLog, Vendor, RecurringTemplate
 )
 from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
@@ -115,6 +115,10 @@ async def startup_event():
     """Initialize database on startup"""
     init_db()
     logger.info("🚀 FinnPayments API started")
+    try:
+        generate_due_recurring_invoices()
+    except Exception as e:
+        logger.error(f"Recurring invoice generation failed: {e}")
 
 
 # ─── Root & Health ────────────────────────────────────────
@@ -1566,6 +1570,324 @@ async def unlink_invoice_vendor(invoice_id: str, company: dict = Depends(get_cur
         log_audit("invoice_vendor_unlinked", user, entity_type="invoice", entity_id=invoice_id,
                   description=f"Invoice {invoice.invoice_number} unlinked from vendor", company_id=company['id'])
         return {"message": "Invoice unlinked from vendor"}
+
+
+# ─── Recurring Invoices ─────────────────────────────────
+
+class RecurringTemplateCreate(PydanticBaseModel):
+    name: str
+    vendor_name: str
+    vendor_id: Optional[int] = None
+    invoice_type: str = "supplier"
+    frequency: str = "monthly"
+    day_of_month: int = 1
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    line_items: List[dict] = []
+    total_amount: float = 0.0
+    tds_rate: float = 0.0
+    tds_applicable: bool = False
+    auto_post: bool = False
+    currency: str = "MUR"
+
+
+def _calculate_next_generation(template: RecurringTemplate, from_date=None):
+    """Calculate the next generation date for a recurring template."""
+    from datetime import date, timedelta
+    today = from_date or date.today()
+    dom = min(template.day_of_month, 28)
+
+    if template.frequency == "monthly":
+        if today.day <= dom:
+            return today.replace(day=dom).isoformat()
+        # Next month
+        if today.month == 12:
+            return date(today.year + 1, 1, dom).isoformat()
+        return date(today.year, today.month + 1, dom).isoformat()
+    elif template.frequency == "quarterly":
+        q_months = [1, 4, 7, 10]
+        for qm in q_months:
+            if today.month <= qm and (today.month < qm or today.day <= dom):
+                return date(today.year, qm, dom).isoformat()
+        return date(today.year + 1, 1, dom).isoformat()
+    elif template.frequency == "annually":
+        if today.month == 1 and today.day <= dom:
+            return date(today.year, 1, dom).isoformat()
+        return date(today.year + 1, 1, dom).isoformat()
+    return today.isoformat()
+
+
+def generate_due_recurring_invoices():
+    """Check all active recurring templates and generate invoices for those due.
+    Should be called on app startup and/or via a daily cron/timer."""
+    from src.invoice_engine import generate_invoice_id, generate_entry_id
+    import json
+
+    db = SessionLocal()
+    try:
+        templates = db.query(RecurringTemplate).filter(RecurringTemplate.is_active == True).all()
+        today_str = date.today().isoformat() if 'date' in dir() else datetime.now().strftime("%Y-%m-%d")
+        from datetime import date as date_cls
+        today_str = date_cls.today().isoformat()
+
+        for template in templates:
+            # Check if company has recurring enabled
+            company = auth_db.get_company_by_id(template.company_id) if hasattr(generate_due_recurring_invoices, 'auth_db') else None
+            from src.auth_models import auth_db as _auth_db
+            company = _auth_db.get_company_by_id(template.company_id)
+            if not company or not company.get('recurring_enabled'):
+                continue
+
+            # Check if end date passed
+            if template.end_date and today_str > template.end_date:
+                continue
+
+            # Check if already generated today
+            if template.last_generated == today_str:
+                continue
+
+            # Check if due
+            if template.next_generation and today_str < template.next_generation:
+                continue
+
+            # Generate the invoice
+            invoice_id = generate_invoice_id()
+            line_items = json.loads(template.line_items) if template.line_items else []
+
+            invoice_data = {
+                "vendor_name": template.vendor_name,
+                "invoice_number": f"REC-{date_cls.today().strftime('%Y%m%d')}-{template.id}",
+                "invoice_date": today_str,
+                "currency": template.currency,
+                "line_items": line_items,
+                "total_amount": template.total_amount,
+                "subtotal": template.total_amount,
+                "tax_total": 0.0,
+                "confidence_score": 1.0,
+                "tds_applicable": template.tds_applicable,
+                "tds_rate": template.tds_rate,
+            }
+
+            entries = generate_accounting_entries(invoice_id, invoice_data, template.invoice_type, company_id=template.company_id)
+
+            result = {
+                "invoice_id": invoice_id,
+                "status": "posted" if template.auto_post else "pending_review",
+                "extracted_data": invoice_data,
+                "suggested_entries": entries,
+                "message": "Generated from recurring template",
+            }
+
+            _save_invoice_to_db(result, template.invoice_type, None, None, None, company_id=template.company_id)
+
+            # Update template
+            template.last_generated = today_str
+            template.next_generation = _calculate_next_generation(template)
+            db.commit()
+
+            # Auto-post if enabled
+            if template.auto_post:
+                inv = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+                if inv:
+                    inv.status = "posted"
+                    for je in inv.journal_entries:
+                        je.status = "posted"
+                    db.commit()
+
+            logger.info(f"🔄 Recurring invoice generated: {invoice_id} from template '{template.name}'")
+
+    except Exception as e:
+        logger.error(f"❌ Recurring generation error: {e}")
+    finally:
+        db.close()
+
+
+@app.get("/recurring/templates")
+async def list_recurring_templates(company: dict = Depends(get_current_company)):
+    """List all recurring templates for the active company"""
+    if not company.get('recurring_enabled'):
+        return {"total": 0, "templates": [], "recurring_enabled": False}
+    with get_db() as db:
+        templates = db.query(RecurringTemplate).filter(
+            RecurringTemplate.company_id == company['id']
+        ).order_by(RecurringTemplate.name).all()
+        return {
+            "total": len(templates),
+            "recurring_enabled": True,
+            "templates": [
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "vendor_name": t.vendor_name,
+                    "invoice_type": t.invoice_type,
+                    "frequency": t.frequency,
+                    "day_of_month": t.day_of_month,
+                    "total_amount": t.total_amount,
+                    "tds_applicable": t.tds_applicable,
+                    "tds_rate": t.tds_rate,
+                    "auto_post": t.auto_post,
+                    "is_active": t.is_active,
+                    "last_generated": t.last_generated,
+                    "next_generation": t.next_generation,
+                    "start_date": t.start_date,
+                    "end_date": t.end_date,
+                }
+                for t in templates
+            ],
+        }
+
+
+@app.post("/recurring/templates")
+async def create_recurring_template(template_data: RecurringTemplateCreate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Create a recurring invoice template (admin only, requires recurring enabled)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if not company.get('recurring_enabled'):
+        raise HTTPException(status_code=400, detail="Recurring invoices are not enabled for this company. Enable it in admin settings first.")
+    import json
+    with get_db() as db:
+        template = RecurringTemplate(
+            name=template_data.name,
+            vendor_name=template_data.vendor_name,
+            vendor_id=template_data.vendor_id,
+            invoice_type=template_data.invoice_type,
+            frequency=template_data.frequency,
+            day_of_month=template_data.day_of_month,
+            start_date=template_data.start_date,
+            end_date=template_data.end_date,
+            line_items=json.dumps(template_data.line_items),
+            total_amount=template_data.total_amount,
+            tds_rate=template_data.tds_rate,
+            tds_applicable=template_data.tds_applicable,
+            auto_post=template_data.auto_post,
+            currency=template_data.currency,
+            is_active=True,
+            company_id=company['id'],
+        )
+        # Calculate next generation
+        template.next_generation = _calculate_next_generation(template)
+        db.add(template)
+        db.commit()
+        log_audit("recurring_created", user, entity_type="recurring_template", entity_id=str(template.id),
+                  description=f"Recurring template created: {template_data.name}", company_id=company['id'])
+        return {"id": template.id, "message": f"Recurring template '{template_data.name}' created"}
+
+
+@app.put("/recurring/templates/{template_id}")
+async def update_recurring_template(template_id: int, template_data: RecurringTemplateCreate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Update a recurring template (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import json
+    with get_db() as db:
+        template = db.query(RecurringTemplate).filter(RecurringTemplate.id == template_id, RecurringTemplate.company_id == company['id']).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        template.name = template_data.name
+        template.vendor_name = template_data.vendor_name
+        template.vendor_id = template_data.vendor_id
+        template.invoice_type = template_data.invoice_type
+        template.frequency = template_data.frequency
+        template.day_of_month = template_data.day_of_month
+        template.start_date = template_data.start_date
+        template.end_date = template_data.end_date
+        template.line_items = json.dumps(template_data.line_items)
+        template.total_amount = template_data.total_amount
+        template.tds_rate = template_data.tds_rate
+        template.tds_applicable = template_data.tds_applicable
+        template.auto_post = template_data.auto_post
+        template.currency = template_data.currency
+        template.next_generation = _calculate_next_generation(template)
+        template.updated_at = datetime.utcnow()
+        db.commit()
+        log_audit("recurring_updated", user, entity_type="recurring_template", entity_id=str(template_id),
+                  description=f"Recurring template updated: {template_data.name}", company_id=company['id'])
+        return {"message": "Template updated"}
+
+
+@app.delete("/recurring/templates/{template_id}")
+async def delete_recurring_template(template_id: int, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Delete a recurring template (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    with get_db() as db:
+        template = db.query(RecurringTemplate).filter(RecurringTemplate.id == template_id, RecurringTemplate.company_id == company['id']).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        log_audit("recurring_deleted", user, entity_type="recurring_template", entity_id=str(template_id),
+                  description=f"Recurring template deleted: {template.name}", company_id=company['id'])
+        db.delete(template)
+        db.commit()
+        return {"message": "Template deleted"}
+
+
+@app.patch("/recurring/templates/{template_id}/toggle")
+async def toggle_recurring_template(template_id: int, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Pause/resume a recurring template"""
+    with get_db() as db:
+        template = db.query(RecurringTemplate).filter(RecurringTemplate.id == template_id, RecurringTemplate.company_id == company['id']).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        template.is_active = not template.is_active
+        if template.is_active:
+            template.next_generation = _calculate_next_generation(template)
+        db.commit()
+        action = "resumed" if template.is_active else "paused"
+        log_audit(f"recurring_{action}", user, entity_type="recurring_template", entity_id=str(template_id),
+                  description=f"Recurring template '{template.name}' {action}", company_id=company['id'])
+        return {"message": f"Template {action}", "is_active": template.is_active}
+
+
+@app.post("/recurring/generate-now/{template_id}")
+async def generate_recurring_now(template_id: int, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Manually trigger generation for a specific template (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    from src.invoice_engine import generate_invoice_id
+    from datetime import date as date_cls
+    import json
+
+    with get_db() as db:
+        template = db.query(RecurringTemplate).filter(RecurringTemplate.id == template_id, RecurringTemplate.company_id == company['id']).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+        invoice_id = generate_invoice_id()
+        line_items = json.loads(template.line_items) if template.line_items else []
+
+        invoice_data = {
+            "vendor_name": template.vendor_name,
+            "invoice_number": f"REC-{date_cls.today().strftime('%Y%m%d')}-{template.id}",
+            "invoice_date": today_str,
+            "currency": template.currency,
+            "line_items": line_items,
+            "total_amount": template.total_amount,
+            "subtotal": template.total_amount,
+            "tax_total": 0.0,
+            "confidence_score": 1.0,
+            "tds_applicable": template.tds_applicable,
+            "tds_rate": template.tds_rate,
+        }
+
+        entries = generate_accounting_entries(invoice_id, invoice_data, template.invoice_type, company_id=template.company_id)
+        result = {
+            "invoice_id": invoice_id,
+            "status": "pending_review",
+            "extracted_data": invoice_data,
+            "suggested_entries": entries,
+            "message": "Generated from recurring template",
+        }
+        _save_invoice_to_db(result, template.invoice_type, None, None, None, company_id=company['id'])
+
+        template.last_generated = today_str
+        template.next_generation = _calculate_next_generation(template)
+        db.commit()
+
+        log_audit("recurring_generated", user, entity_type="recurring_template", entity_id=str(template_id),
+                  description=f"Recurring invoice {invoice_id} generated from '{template.name}'", company_id=company['id'])
+
+        return {"invoice_id": invoice_id, "message": f"Invoice generated from template '{template.name}'"}
 
 
 # ─── Chart of Accounts ───────────────────────────────────

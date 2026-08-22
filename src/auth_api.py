@@ -351,6 +351,24 @@ async def toggle_maker_checker(
     }
 
 
+@router.put("/admin/companies/{company_id}/recurring")
+async def toggle_recurring(
+    company_id: str,
+    request: MakerCheckerToggle,
+    admin: dict = Depends(require_admin),
+):
+    """Enable or disable recurring invoices for a company (admin only)"""
+    company = auth_db.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    auth_db.update_company_recurring(company_id, request.enabled)
+    return {
+        "message": f"Recurring invoices {'enabled' if request.enabled else 'disabled'} for {company['name']}",
+        "recurring_enabled": request.enabled,
+    }
+
+
 @router.get("/admin/companies/{company_id}/users", response_model=list)
 async def get_company_users(company_id: str, admin: dict = Depends(require_admin)):
     """Get users assigned to a company (admin only)"""

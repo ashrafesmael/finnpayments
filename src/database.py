@@ -222,6 +222,32 @@ class Vendor(Base):
     company_id = Column(String(50), index=True)
 
 
+class RecurringTemplate(Base):
+    __tablename__ = "recurring_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    vendor_name = Column(String(255), nullable=False)
+    vendor_id = Column(Integer, nullable=True)
+    invoice_type = Column(String(20), default="supplier")
+    frequency = Column(String(20), default="monthly")  # monthly, quarterly, annually
+    day_of_month = Column(Integer, default=1)  # 1-28
+    start_date = Column(String(20))
+    end_date = Column(String(20), nullable=True)  # NULL = indefinite
+    line_items = Column(Text)  # JSON array of line items
+    total_amount = Column(Float, default=0.0)  # 0 = variable (enter manually)
+    tds_rate = Column(Float, default=0.0)
+    tds_applicable = Column(Boolean, default=False)
+    auto_post = Column(Boolean, default=False)
+    currency = Column(String(10), default="MUR")
+    is_active = Column(Boolean, default=True)
+    last_generated = Column(String(20), nullable=True)
+    next_generation = Column(String(20), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    company_id = Column(String(50), index=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

@@ -9,6 +9,7 @@ import {
   updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
   getAuditLog,
   getVendors, createVendor, updateVendor, deleteVendor, linkInvoiceVendor, unlinkInvoiceVendor,
+  getRecurringTemplates, createRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate, toggleRecurringTemplate, generateRecurringNow, toggleRecurringCompany,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
@@ -74,6 +75,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'entries', label: 'Journal Entries', icon: Icons.Book },
     { id: 'accounts', label: 'Chart of Accounts', icon: Icons.List },
     { id: 'vendors', label: 'Vendors', icon: Icons.Users },
+    { id: 'recurring', label: 'Recurring', icon: Icons.Refresh },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
     { id: 'tds', label: 'TDS Register', icon: Icons.Dollar },
     ...(isAdmin ? [{ id: 'audit', label: 'Audit Log', icon: Icons.List }] : []),
@@ -1232,6 +1234,126 @@ function TdsRegister() {
   );
 }
 
+function RecurringInvoices() {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [recurringEnabled, setRecurringEnabled] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name: '', vendor_name: '', invoice_type: 'supplier', frequency: 'monthly', day_of_month: 1, total_amount: 0, tds_applicable: false, tds_rate: 0, auto_post: false, currency: 'MUR', line_items: '[]' });
+  const { user, selectedCompany, refreshUser } = useAuth();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await getRecurringTemplates();
+      setTemplates(r.templates || []);
+      setRecurringEnabled(r.recurring_enabled || false);
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleToggleCompany = async () => {
+    try { await toggleRecurringCompany(selectedCompany.id, !recurringEnabled); await refreshUser(); load(); }
+    catch (e) { alert(e.message); }
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const data = { ...form, line_items: form.line_items ? JSON.parse(form.line_items) : [], tds_applicable: form.tds_applicable };
+      if (editing) { await updateRecurringTemplate(editing, data); }
+      else { await createRecurringTemplate(data); }
+      setShowForm(false); setEditing(null);
+      setForm({ name: '', vendor_name: '', invoice_type: 'supplier', frequency: 'monthly', day_of_month: 1, total_amount: 0, tds_applicable: false, tds_rate: 0, auto_post: false, currency: 'MUR', line_items: '[]' });
+      load();
+    } catch (e) { alert(e.message); }
+  };
+
+  const handleEdit = (t) => {
+    setEditing(t.id);
+    setForm({ name: t.name, vendor_name: t.vendor_name, invoice_type: t.invoice_type, frequency: t.frequency, day_of_month: t.day_of_month, total_amount: t.total_amount, tds_applicable: t.tds_applicable, tds_rate: t.tds_rate, auto_post: t.auto_post, currency: 'MUR', line_items: '[]' });
+    setShowForm(true);
+  };
+
+  return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header">
+        <h2>Recurring Invoices</h2>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-muted)' }}>
+            <input type="checkbox" checked={recurringEnabled} onChange={handleToggleCompany} />
+            Enabled
+          </label>
+          {recurringEnabled && <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>+ Add Template</button>}
+        </div>
+      </div>
+
+      {!recurringEnabled ? (
+        <Empty text="Recurring invoices are disabled. Toggle 'Enabled' above to activate (admin only)." />
+      ) : loading ? <Loading /> : (
+        <div className="card">
+          <table className="data-table">
+            <thead><tr><th>Name</th><th>Vendor</th><th>Frequency</th><th>Amount</th><th>Next Gen</th><th>Last Gen</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {templates.map(t => (
+                <tr key={t.id}>
+                  <td style={{ fontWeight: 500 }}>{t.name}</td>
+                  <td>{t.vendor_name}</td>
+                  <td className="text-xs">{t.frequency} (day {t.day_of_month})</td>
+                  <td className="mono text-sm">{t.total_amount > 0 ? fmtCurrency(t.total_amount, t.currency) : 'Variable'}</td>
+                  <td className="text-xs text-muted">{t.next_generation || '-'}</td>
+                  <td className="text-xs text-muted">{t.last_generated || 'Never'}</td>
+                  <td>{t.is_active ? <span className="badge badge-posted">Active</span> : <span className="badge badge-draft">Paused</span>}</td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn btn-sm btn-primary" onClick={() => generateRecurringNow(t.id).then(() => load()).catch(e => alert(e.message))}>Generate Now</button>
+                      <button className="btn btn-sm" onClick={() => handleEdit(t)}>Edit</button>
+                      <button className="btn btn-sm" onClick={() => toggleRecurringTemplate(t.id).then(() => load())}>{t.is_active ? 'Pause' : 'Resume'}</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => { if (confirm('Delete this template?')) deleteRecurringTemplate(t.id).then(() => load()); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {templates.length === 0 && <tr><td colSpan={8}><Empty text="No recurring templates yet." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showForm && recurringEnabled && (
+        <div className="card" style={{ padding: 20 }}>
+          <h3 style={{ marginBottom: 16 }}>{editing ? 'Edit Template' : 'New Recurring Template'}</h3>
+          <div className="form-grid">
+            <div><label className="input-label">Name</label><input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Monthly Electricity" /></div>
+            <div><label className="input-label">Vendor Name</label><input className="input" value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} /></div>
+            <div>
+              <label className="input-label">Frequency</label>
+              <select className="input" value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="annually">Annually</option>
+              </select>
+            </div>
+            <div><label className="input-label">Day of Month</label><input type="number" min={1} max={28} className="input" value={form.day_of_month} onChange={(e) => setForm({ ...form, day_of_month: parseInt(e.target.value) || 1 })} /></div>
+            <div><label className="input-label">Total Amount (0 = variable)</label><input type="number" step="0.01" className="input" value={form.total_amount} onChange={(e) => setForm({ ...form, total_amount: parseFloat(e.target.value) || 0 })} /></div>
+            <div><label className="input-label">TDS Rate %</label><input type="number" step="0.1" className="input" value={form.tds_rate} onChange={(e) => setForm({ ...form, tds_rate: parseFloat(e.target.value) || 0 })} /></div>
+            <div><label className="input-label">Currency</label><select className="input" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}><option value="MUR">MUR</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="ZAR">ZAR</option></select></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}><input type="checkbox" checked={form.tds_applicable} onChange={(e) => setForm({ ...form, tds_applicable: e.target.checked })} /> TDS Applicable</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}><input type="checkbox" checked={form.auto_post} onChange={(e) => setForm({ ...form, auto_post: e.target.checked })} /> Auto-Post</label>
+            </div>
+          </div>
+          <div className="btn-group" style={{ marginTop: 16 }}>
+            <button className="btn btn-primary" onClick={handleSubmit} disabled={!form.name || !form.vendor_name}>{editing ? 'Update' : 'Create'}</button>
+            <button className="btn" onClick={() => { setShowForm(false); setEditing(null); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VendorMaster() {
   const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1418,6 +1540,7 @@ function AppLayout() {
         {view === 'entries' && <JournalEntries />}
         {view === 'accounts' && <ChartOfAccounts />}
         {view === 'vendors' && <VendorMaster />}
+        {view === 'recurring' && <RecurringInvoices />}
         {view === 'rules' && <LearnedRules />}
         {view === 'tds' && <TdsRegister />}
         {view === 'audit' && isAdmin() && <AuditLog />}
