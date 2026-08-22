@@ -15,6 +15,7 @@ export default defineConfig({
       '/invoices': { target: 'http://localhost:8001', changeOrigin: true },
       '/accounting': { target: 'http://localhost:8001', changeOrigin: true },
       '/auth': { target: 'http://localhost:8001', changeOrigin: true },
+      '/webhooks': { target: 'http://localhost:8001', changeOrigin: true },
     }
   }
 })

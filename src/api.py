@@ -40,6 +40,12 @@ from src.accounting_engine import (
 )
 from src.auth_api import router as auth_router, get_current_company, get_current_user
 from src.email_service import email_service
+from src.docuseal_integration import (
+    is_configured as docuseal_configured,
+    create_approval_envelope,
+    verify_webhook,
+    get_submission_status,
+)
 
 logger = logging.getLogger("FinnPayments.API")
 
@@ -1649,7 +1655,100 @@ async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict 
         db.commit()
         log_audit("invoice_assigned", user, entity_type="invoice", entity_id=invoice_id,
                   description=f"Invoice {invoice.invoice_number} assigned to {assignee['email'] if assignee else request.assigned_to}", company_id=company['id'])
+
+        # If DocuSeal is configured, create an e-signature envelope for the approver
+        if docuseal_configured() and assignee and invoice.status == "pending_review":
+            doc_path = invoice.source_file if invoice.source_file and os.path.exists(invoice.source_file) else None
+            envelope = await create_approval_envelope(
+                invoice_id=invoice.invoice_id,
+                invoice_number=invoice.invoice_number,
+                vendor_name=invoice.vendor_name,
+                amount=invoice.total_amount,
+                currency=invoice.currency,
+                approver_email=assignee['email'],
+                approver_name=assignee['full_name'],
+                document_path=doc_path,
+            )
+            if envelope:
+                # Store the DocuSeal submission ID on the invoice (as metadata in source_file field's sibling)
+                # We'll use a simple approach: store in the audit log
+                log_audit("docuseal_envelope_created", user, entity_type="invoice", entity_id=invoice_id,
+                          description=f"DocuSeal envelope created for {invoice.invoice_number} (submission_id={envelope.get('id')})", company_id=company['id'])
+
         return {"message": f"Invoice assigned to {assignee['full_name'] if assignee else 'user'}", "assigned_to": request.assigned_to}
+
+
+# ─── DocuSeal Webhook ────────────────────────────────────
+
+@app.post("/webhooks/docuseal")
+async def docuseal_webhook(request: Request):
+    """Receive DocuSeal webhook callbacks when a submission is completed/rejected.
+
+    DocuSeal sends a POST with the submission data including metadata
+    that we set when creating the envelope (invoice_id, etc.).
+    """
+    body = await request.body()
+
+    # Verify webhook signature
+    if not verify_webhook(dict(request.headers), body):
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+
+    import json
+    try:
+        payload = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Extract metadata
+    metadata = payload.get("metadata", {})
+    invoice_id = metadata.get("invoice_id")
+
+    if not invoice_id:
+        # Could be a different webhook, just acknowledge
+        return {"status": "ok", "message": "No invoice_id in metadata"}
+
+    # Get the decision from the submitted fields
+    status = payload.get("status", "")
+    submitter_email = payload.get("submitter", {}).get("email", "")
+
+    logger.info(f"📧 DocuSeal webhook: invoice_id={invoice_id}, status={status}")
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            logger.warning(f"DocuSeal webhook: invoice {invoice_id} not found")
+            return {"status": "ok", "message": "Invoice not found"}
+
+        # DocuSeal "completed" = approved, "declined" = rejected
+        if status == "completed":
+            invoice.status = "approved"
+            invoice.approved_by = None  # Will be set by the webhook user
+            invoice.updated_at = datetime.utcnow()
+
+            # Find the approver by email
+            from src.auth_models import auth_db as _auth_db
+            approver = _auth_db.get_user_by_email(submitter_email)
+            if approver:
+                invoice.approved_by = approver['id']
+
+            db.commit()
+            log_audit("docuseal_approved", {"email": submitter_email, "id": invoice.approved_by or "docuseal"},
+                      entity_type="invoice", entity_id=invoice_id,
+                      description=f"Invoice {invoice.invoice_number} approved via DocuSeal e-signature by {submitter_email}",
+                      company_id=invoice.company_id)
+            logger.info(f"✅ Invoice {invoice.invoice_number} auto-approved via DocuSeal")
+
+        elif status == "declined":
+            invoice.status = "rejected"
+            invoice.updated_at = datetime.utcnow()
+            db.commit()
+            log_audit("docuseal_rejected", {"email": submitter_email, "id": "docuseal"},
+                      entity_type="invoice", entity_id=invoice_id,
+                      description=f"Invoice {invoice.invoice_number} rejected via DocuSeal by {submitter_email}",
+                      company_id=invoice.company_id)
+            logger.info(f"❌ Invoice {invoice.invoice_number} rejected via DocuSeal")
+
+    return {"status": "ok"}
 
 
 # ─── Recurring Invoices ─────────────────────────────────
