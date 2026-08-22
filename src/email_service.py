@@ -306,5 +306,178 @@ class EmailService:
         """
         return self._send_email(to_email, subject, html_content)
 
+    def send_invoice_approved(self, to_email: str, full_name: str, invoice_number: str,
+                              vendor_name: str, amount: float, currency: str, login_url: str = "") -> bool:
+        """Notify that an invoice is approved and needs posting (maker/checker context)."""
+        subject = "finnpayments - Invoice Approved, Ready for Posting"
+        reset_link = f'<p><a href="{login_url}" class="btn">View & Post Invoice</a></p>' if login_url else ''
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
+                .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 20px 0; }}
+                .status {{ background: #dcfce7; border: 1px solid #22c55e; color: #166534; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
+                </div>
+                <div class="content">
+                    <h2>Dear {full_name},</h2>
+                    <div class="status">
+                        <strong>Invoice Approved &mdash; Ready for Posting</strong>
+                        <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been approved and is now ready to be posted to the General Ledger.</p>
+                    </div>
+                    <p>Please review and post this invoice at your earliest convenience.</p>
+                    {reset_link}
+                    <p>Best regards,<br>finnpayments Team</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return self._send_email(to_email, subject, html_content)
+
+    def send_invoice_rejected(self, to_email: str, full_name: str, invoice_number: str,
+                               vendor_name: str, amount: float, currency: str, reason: str = "") -> bool:
+        """Notify that an invoice was rejected."""
+        reason_text = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
+        subject = "finnpayments - Invoice Rejected"
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
+                .status {{ background: #fee2e2; border: 1px solid #ef4444; color: #991b1b; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
+                </div>
+                <div class="content">
+                    <h2>Dear {full_name},</h2>
+                    <div class="status">
+                        <strong>Invoice Rejected</strong>
+                        <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been rejected.</p>
+                        {reason_text}
+                    </div>
+                    <p>If you believe this was done in error, please contact your system administrator.</p>
+                    <p>Best regards,<br>finnpayments Team</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return self._send_email(to_email, subject, html_content)
+
+    def send_invoice_posted(self, to_email: str, full_name: str, invoice_number: str,
+                            vendor_name: str, amount: float, currency: str, login_url: str = "") -> bool:
+        """Notify that an invoice has been posted to the GL and is ready for payment."""
+        reset_link = f'<p><a href="{login_url}" class="btn">View Invoice</a></p>' if login_url else ''
+        subject = "finnpayments - Invoice Posted to GL, Ready for Payment"
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
+                .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 20px 0; }}
+                .status {{ background: #dcfce7; border: 1px solid #22c55e; color: #166534; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
+                </div>
+                <div class="content">
+                    <h2>Dear {full_name},</h2>
+                    <div class="status">
+                        <strong>Invoice Posted &mdash; Ready for Payment</strong>
+                        <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been posted to the General Ledger and is now ready for payment.</p>
+                    </div>
+                    {reset_link}
+                    <p>Best regards,<br>finnpayments Team</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return self._send_email(to_email, subject, html_content)
+
+    def send_new_invoice_uploaded(self, to_email: str, full_name: str, invoice_number: str,
+                                   vendor_name: str, amount: float, currency: str, login_url: str = "") -> bool:
+        """Notify approvers that a new invoice has been uploaded and needs review."""
+        reset_link = f'<p><a href="{login_url}" class="btn">Review Invoice</a></p>' if login_url else ''
+        subject = "finnpayments - New Invoice Needs Review"
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #64748b; font-size: 12px; }}
+                .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 20px 0; }}
+                .status {{ background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>finnpayments</h1>
+                    <p>AI Invoice Processing & Accounting</p>
+                </div>
+                <div class="content">
+                    <h2>Dear {full_name},</h2>
+                    <div class="status">
+                        <strong>New Invoice Uploaded &mdash; Pending Review</strong>
+                        <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been uploaded and needs your review.</p>
+                    </div>
+                    {reset_link}
+                    <p>Best regards,<br>finnpayments Team</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message from finnpayments. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return self._send_email(to_email, subject, html_content)
+
 # Global email service instance
 email_service = EmailService()

@@ -218,10 +218,31 @@ async def upload_invoice(
         logger.error(f"❌ Database save error: {e}")
     
     results_store[result["invoice_id"]] = result
-    
+
     processing_time = time.time() - start_time
     result["processing_time"] = round(processing_time, 2)
-    
+
+    # Notify company users about the new invoice
+    try:
+        from src.auth_models import auth_db as _auth_db
+        login_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
+        company_users = _auth_db.get_users_for_company(company['id'])
+        extracted = result.get("extracted_data", {})
+        inv_num = extracted.get("invoice_number", result["invoice_id"])
+        vendor = extracted.get("vendor_name", "Unknown")
+        total = extracted.get("total_amount", 0)
+        cur = extracted.get("currency", "MUR")
+        for cu in company_users:
+            if cu['id'] == user['id']:
+                continue
+            if cu['status'] != 'approved':
+                continue
+            email_service.send_new_invoice_uploaded(
+                cu['email'], cu['full_name'], inv_num, vendor, total, cur, login_url
+            )
+    except Exception as e:
+        logger.error(f"Failed to send upload notification: {e}")
+
     return result
 
 
@@ -472,6 +493,48 @@ async def update_invoice_status(
             description=f"Invoice {invoice.invoice_number} ({invoice.vendor_name}) status changed from {old_status} to {status}",
             company_id=company['id'],
         )
+
+        # ── Send workflow notifications ──
+        login_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
+        from src.auth_models import auth_db as _auth_db
+        company_users = _auth_db.get_users_for_company(company['id'])
+
+        if status == "approved":
+            # Notify all company users (except the approver if maker/checker) that the invoice is ready for posting
+            for cu in company_users:
+                if company.get('maker_checker_enabled') and cu['id'] == user['id']:
+                    continue  # Skip the approver (maker/checker)
+                if cu['status'] != 'approved':
+                    continue
+                email_service.send_invoice_approved(
+                    cu['email'], cu['full_name'],
+                    invoice.invoice_number, invoice.vendor_name,
+                    invoice.total_amount, invoice.currency, login_url
+                )
+
+        elif status == "rejected":
+            # Notify the user who uploaded/approved it
+            for cu in company_users:
+                if cu['status'] != 'approved':
+                    continue
+                email_service.send_invoice_rejected(
+                    cu['email'], cu['full_name'],
+                    invoice.invoice_number, invoice.vendor_name,
+                    invoice.total_amount, invoice.currency
+                )
+
+        elif status == "posted":
+            # Notify company users that the invoice is posted and ready for payment
+            for cu in company_users:
+                if cu['id'] == user['id']:
+                    continue
+                if cu['status'] != 'approved':
+                    continue
+                email_service.send_invoice_posted(
+                    cu['email'], cu['full_name'],
+                    invoice.invoice_number, invoice.vendor_name,
+                    invoice.total_amount, invoice.currency, login_url
+                )
 
         return {
             "invoice_id": invoice_id,
