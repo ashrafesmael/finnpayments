@@ -398,6 +398,7 @@ async def get_my_company_users(user: dict = Depends(get_current_user)):
                     "email": u['email'],
                     "full_name": u['full_name'],
                     "role": u['role'],
+                    "status": u['status'],
                 }
     return list(result.values())
 
