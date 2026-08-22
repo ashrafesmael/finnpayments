@@ -1682,10 +1682,15 @@ async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict 
 
 @app.post("/webhooks/docuseal")
 async def docuseal_webhook(request: Request):
-    """Receive DocuSeal webhook callbacks when a submission is completed/rejected.
+    """Receive DocuSeal webhook callbacks when a submission is completed/declined.
 
-    DocuSeal sends a POST with the submission data including metadata
-    that we set when creating the envelope (invoice_id, etc.).
+    DocuSeal sends events:
+    - form.completed: submitter signed/approved
+    - form.declined: submitter declined
+    - submission.completed: all parties completed
+
+    The payload includes the submitter's email and the metadata we set
+    when creating the envelope (invoice_id, etc.).
     """
     body = await request.body()
 
@@ -1699,19 +1704,32 @@ async def docuseal_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Extract metadata
-    metadata = payload.get("metadata", {})
+    # DocuSeal webhook event types: form.completed, form.declined, submission.completed
+    event_type = payload.get("event_type") or payload.get("type", "")
+    
+    # Extract submitter info — DocuSeal nests it differently per event type
+    submitter = payload.get("submitter") or payload.get("data", {}).get("submitter", {})
+    if isinstance(submitter, dict):
+        submitter_email = submitter.get("email", "")
+        metadata = submitter.get("metadata", {}) or payload.get("metadata", {})
+    else:
+        submitter_email = ""
+        metadata = payload.get("metadata", {})
+
     invoice_id = metadata.get("invoice_id")
 
     if not invoice_id:
-        # Could be a different webhook, just acknowledge
+        logger.info(f"DocuSeal webhook: no invoice_id in metadata (event={event_type})")
         return {"status": "ok", "message": "No invoice_id in metadata"}
 
-    # Get the decision from the submitted fields
-    status = payload.get("status", "")
-    submitter_email = payload.get("submitter", {}).get("email", "")
+    logger.info(f"📧 DocuSeal webhook: invoice_id={invoice_id}, event={event_type}, email={submitter_email}")
 
-    logger.info(f"📧 DocuSeal webhook: invoice_id={invoice_id}, status={status}")
+    # Determine action from event type
+    is_completed = event_type in ("form.completed", "submission.completed") or payload.get("completed_at") or payload.get("status") == "completed"
+    is_declined = event_type == "form.declined" or payload.get("declined_at") or payload.get("status") == "declined"
+
+    if not is_completed and not is_declined:
+        return {"status": "ok", "message": f"Ignored event: {event_type}"}
 
     with get_db() as db:
         invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
@@ -1719,26 +1737,22 @@ async def docuseal_webhook(request: Request):
             logger.warning(f"DocuSeal webhook: invoice {invoice_id} not found")
             return {"status": "ok", "message": "Invoice not found"}
 
-        # DocuSeal "completed" = approved, "declined" = rejected
-        if status == "completed":
-            invoice.status = "approved"
-            invoice.approved_by = None  # Will be set by the webhook user
-            invoice.updated_at = datetime.utcnow()
+        from src.auth_models import auth_db as _auth_db
 
-            # Find the approver by email
-            from src.auth_models import auth_db as _auth_db
-            approver = _auth_db.get_user_by_email(submitter_email)
+        if is_completed:
+            invoice.status = "approved"
+            approver = _auth_db.get_user_by_email(submitter_email) if submitter_email else None
             if approver:
                 invoice.approved_by = approver['id']
-
+            invoice.updated_at = datetime.utcnow()
             db.commit()
             log_audit("docuseal_approved", {"email": submitter_email, "id": invoice.approved_by or "docuseal"},
                       entity_type="invoice", entity_id=invoice_id,
                       description=f"Invoice {invoice.invoice_number} approved via DocuSeal e-signature by {submitter_email}",
                       company_id=invoice.company_id)
-            logger.info(f"✅ Invoice {invoice.invoice_number} auto-approved via DocuSeal")
+            logger.info(f"✅ Invoice {invoice.invoice_number} auto-approved via DocuSeal by {submitter_email}")
 
-        elif status == "declined":
+        elif is_declined:
             invoice.status = "rejected"
             invoice.updated_at = datetime.utcnow()
             db.commit()
@@ -1746,7 +1760,7 @@ async def docuseal_webhook(request: Request):
                       entity_type="invoice", entity_id=invoice_id,
                       description=f"Invoice {invoice.invoice_number} rejected via DocuSeal by {submitter_email}",
                       company_id=invoice.company_id)
-            logger.info(f"❌ Invoice {invoice.invoice_number} rejected via DocuSeal")
+            logger.info(f"❌ Invoice {invoice.invoice_number} rejected via DocuSeal by {submitter_email}")
 
     return {"status": "ok"}
 
