@@ -39,6 +39,7 @@ from src.accounting_engine import (
     generate_accounting_entries, validate_journal_entry, suggest_account_code
 )
 from src.auth_api import router as auth_router, get_current_company, get_current_user
+from src.email_service import email_service
 
 logger = logging.getLogger("FinnPayments.API")
 
