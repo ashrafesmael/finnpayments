@@ -271,7 +271,7 @@ function InvoiceUpload({ onNavigate }) {
   useEffect(() => {
     const API_URL = import.meta.env.VITE_API_URL || '';
     const token = localStorage.getItem('auth_token');
-    fetch(`${API_URL}/auth/admin/users`, { headers: { 'Authorization': 'Bearer ' + token } })
+    fetch(`${API_URL}/auth/company-users`, { headers: { 'Authorization': 'Bearer ' + token } })
       .then(r => r.ok ? r.json() : [])
       .then(users => setCompanyUsers(users.filter(u => u.status === 'approved')))
       .catch(() => {});
@@ -747,7 +747,7 @@ function AssigneeDropdown({ currentAssignee, onAssign }) {
   useEffect(() => {
     const API_URL = import.meta.env.VITE_API_URL || '';
     const token = localStorage.getItem('auth_token');
-    fetch(`${API_URL}/auth/admin/users`, { headers: { 'Authorization': 'Bearer ' + token } })
+    fetch(`${API_URL}/auth/company-users`, { headers: { 'Authorization': 'Bearer ' + token } })
       .then(r => r.ok ? r.json() : [])
       .then(u => setUsers(u.filter(x => x.status === 'approved')))
       .catch(() => {});

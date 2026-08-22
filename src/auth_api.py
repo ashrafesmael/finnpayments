@@ -384,6 +384,24 @@ async def get_company_users(company_id: str, admin: dict = Depends(require_admin
     ]
 
 
+@router.get("/company-users", response_model=list)
+async def get_my_company_users(user: dict = Depends(get_current_user)):
+    """Get users in the same companies as the current user (for assignment dropdowns).
+    Accessible by any authenticated user."""
+    companies = auth_db.get_user_companies(user['id'])
+    result = {}
+    for c in companies:
+        for u in auth_db.get_users_for_company(c['id']):
+            if u['id'] not in result and u['status'] == 'approved':
+                result[u['id']] = {
+                    "id": u['id'],
+                    "email": u['email'],
+                    "full_name": u['full_name'],
+                    "role": u['role'],
+                }
+    return list(result.values())
+
+
 @router.post("/admin/companies/{company_id}/users/{user_id}")
 async def assign_user_to_company(company_id: str, user_id: str, admin: dict = Depends(require_admin)):
     """Assign a user to a company (admin only)"""
