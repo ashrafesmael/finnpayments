@@ -80,6 +80,10 @@ class Invoice(Base):
     tds_paid_to_mra = Column(Boolean, default=False)
     tds_paid_date = Column(String(20))
 
+    # Vendor master link
+    vendor_id = Column(Integer, index=True)
+    vendor_match_confidence = Column(Float, default=0.0)
+
     # Relationships
     line_items = relationship("InvoiceLineItemDB", back_populates="invoice", cascade="all, delete-orphan")
     journal_entries = relationship("JournalEntryDB", back_populates="invoice", cascade="all, delete-orphan")
@@ -198,6 +202,26 @@ class TDSRate(Base):
     company_id = Column(String(50), index=True)
 
 
+class Vendor(Base):
+    __tablename__ = "vendors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    aliases = Column(Text)  # JSON array of alternative names for fuzzy matching
+    brn = Column(String(50))
+    vat = Column(String(50))
+    address = Column(Text)
+    phone = Column(String(50))
+    email = Column(String(255))
+    default_account_code = Column(String(20))
+    default_tds_rate = Column(Float, default=0.0)
+    payment_terms = Column(String(100))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    company_id = Column(String(50), index=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
@@ -264,6 +288,16 @@ def _migrate_business_db():
         ("tds_paid_date", "TEXT"),
     ]
     for col, coltype in tds_columns:
+        if not column_exists("invoices", col):
+            cursor.execute(f"ALTER TABLE invoices ADD COLUMN {col} {coltype}")
+            logger.info(f"✅ Added {col} column to invoices")
+
+    # Add vendor link columns to invoices
+    vendor_columns = [
+        ("vendor_id", "INTEGER"),
+        ("vendor_match_confidence", "REAL DEFAULT 0.0"),
+    ]
+    for col, coltype in vendor_columns:
         if not column_exists("invoices", col):
             cursor.execute(f"ALTER TABLE invoices ADD COLUMN {col} {coltype}")
             logger.info(f"✅ Added {col} column to invoices")

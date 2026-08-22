@@ -31,7 +31,7 @@ from src.models import (
 from src.database import (
     init_db, get_db, Invoice, InvoiceLineItemDB,
     JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule,
-    TDSRate, SessionLocal, AuditLog
+    TDSRate, SessionLocal, AuditLog, Vendor
 )
 from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
@@ -1358,6 +1358,216 @@ async def get_audit_log(
         }
 
 
+# ─── Vendor Master ──────────────────────────────────────
+
+def _vendor_to_dict(v: Vendor) -> dict:
+    import json
+    return {
+        "id": v.id,
+        "name": v.name,
+        "aliases": json.loads(v.aliases) if v.aliases else [],
+        "brn": v.brn,
+        "vat": v.vat,
+        "address": v.address,
+        "phone": v.phone,
+        "email": v.email,
+        "default_account_code": v.default_account_code,
+        "default_tds_rate": v.default_tds_rate,
+        "payment_terms": v.payment_terms,
+        "is_active": v.is_active,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+    }
+
+
+def _fuzzy_match_vendor(vendor_name: str, company_id: str, threshold: float = 0.8) -> tuple:
+    """Fuzzy-match a vendor name against the vendor master. Returns (vendor_id, confidence)."""
+    from difflib import SequenceMatcher
+    import json
+
+    if not vendor_name:
+        return None, 0.0
+
+    db = SessionLocal()
+    try:
+        vendors = db.query(Vendor).filter(
+            Vendor.company_id == company_id,
+            Vendor.is_active == True,
+        ).all()
+
+        best_id = None
+        best_score = 0.0
+
+        name_lower = vendor_name.lower().strip()
+        for v in vendors:
+            # Check primary name
+            score = SequenceMatcher(None, name_lower, v.name.lower().strip()).ratio()
+            if score > best_score:
+                best_score = score
+                best_id = v.id
+            # Check aliases
+            aliases = json.loads(v.aliases) if v.aliases else []
+            for alias in aliases:
+                alias_score = SequenceMatcher(None, name_lower, alias.lower().strip()).ratio()
+                if alias_score > best_score:
+                    best_score = alias_score
+                    best_id = v.id
+
+        if best_score >= threshold:
+            return best_id, best_score
+        return None, best_score
+    finally:
+        db.close()
+
+
+@app.get("/vendors")
+async def list_vendors(
+    search: Optional[str] = None,
+    company: dict = Depends(get_current_company),
+):
+    """List all vendors for the active company"""
+    with get_db() as db:
+        query = db.query(Vendor).filter(Vendor.company_id == company['id'])
+        if search:
+            query = query.filter(Vendor.name.ilike(f"%{search}%"))
+        vendors = query.order_by(Vendor.name).all()
+        return {
+            "total": len(vendors),
+            "vendors": [_vendor_to_dict(v) for v in vendors],
+        }
+
+
+class VendorCreate(PydanticBaseModel):
+    name: str
+    aliases: Optional[List[str]] = []
+    brn: Optional[str] = None
+    vat: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    default_account_code: Optional[str] = None
+    default_tds_rate: float = 0.0
+    payment_terms: Optional[str] = None
+
+
+@app.post("/vendors")
+async def create_vendor(vendor_data: VendorCreate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Create a vendor (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import json
+    with get_db() as db:
+        vendor = Vendor(
+            name=vendor_data.name,
+            aliases=json.dumps(vendor_data.aliases),
+            brn=vendor_data.brn,
+            vat=vendor_data.vat,
+            address=vendor_data.address,
+            phone=vendor_data.phone,
+            email=vendor_data.email,
+            default_account_code=vendor_data.default_account_code,
+            default_tds_rate=vendor_data.default_tds_rate,
+            payment_terms=vendor_data.payment_terms,
+            is_active=True,
+            company_id=company['id'],
+        )
+        db.add(vendor)
+        db.commit()
+        log_audit("vendor_created", user, entity_type="vendor", entity_id=str(vendor.id),
+                  description=f"Vendor created: {vendor_data.name}", company_id=company['id'])
+        return {"id": vendor.id, "message": f"Vendor '{vendor_data.name}' created"}
+
+
+@app.put("/vendors/{vendor_id}")
+async def update_vendor(vendor_id: int, vendor_data: VendorCreate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Update a vendor (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import json
+    with get_db() as db:
+        vendor = db.query(Vendor).filter(Vendor.id == vendor_id, Vendor.company_id == company['id']).first()
+        if not vendor:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        vendor.name = vendor_data.name
+        vendor.aliases = json.dumps(vendor_data.aliases)
+        vendor.brn = vendor_data.brn
+        vendor.vat = vendor_data.vat
+        vendor.address = vendor_data.address
+        vendor.phone = vendor_data.phone
+        vendor.email = vendor_data.email
+        vendor.default_account_code = vendor_data.default_account_code
+        vendor.default_tds_rate = vendor_data.default_tds_rate
+        vendor.payment_terms = vendor_data.payment_terms
+        vendor.updated_at = datetime.utcnow()
+        db.commit()
+        log_audit("vendor_updated", user, entity_type="vendor", entity_id=str(vendor_id),
+                  description=f"Vendor updated: {vendor_data.name}", company_id=company['id'])
+        return {"message": "Vendor updated"}
+
+
+@app.delete("/vendors/{vendor_id}")
+async def delete_vendor(vendor_id: int, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Delete a vendor (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    with get_db() as db:
+        vendor = db.query(Vendor).filter(Vendor.id == vendor_id, Vendor.company_id == company['id']).first()
+        if not vendor:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        log_audit("vendor_deleted", user, entity_type="vendor", entity_id=str(vendor_id),
+                  description=f"Vendor deleted: {vendor.name}", company_id=company['id'])
+        db.delete(vendor)
+        db.commit()
+        return {"message": "Vendor deleted"}
+
+
+class VendorLinkRequest(PydanticBaseModel):
+    vendor_id: int
+
+
+@app.patch("/invoices/{invoice_id}/vendor")
+async def link_invoice_to_vendor(invoice_id: str, request: VendorLinkRequest, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Link an invoice to a vendor and apply vendor defaults (TDS, account code)"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        vendor = db.query(Vendor).filter(Vendor.id == request.vendor_id, Vendor.company_id == company['id']).first()
+        if not vendor:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        invoice.vendor_id = vendor.id
+        invoice.vendor_match_confidence = 1.0
+        # Apply vendor defaults if not already set
+        if vendor.default_tds_rate > 0 and not invoice.tds_applicable:
+            invoice.tds_applicable = True
+            invoice.tds_rate = vendor.default_tds_rate
+        if vendor.brn and not invoice.vendor_brn:
+            invoice.vendor_brn = vendor.brn
+        if vendor.vat and not invoice.vendor_vat:
+            invoice.vendor_vat = vendor.vat
+        invoice.updated_at = datetime.utcnow()
+        db.commit()
+        log_audit("invoice_vendor_linked", user, entity_type="invoice", entity_id=invoice_id,
+                  description=f"Invoice {invoice.invoice_number} linked to vendor {vendor.name}", company_id=company['id'])
+        return {"message": f"Invoice linked to {vendor.name}", "vendor_name": vendor.name}
+
+
+@app.patch("/invoices/{invoice_id}/vendor/unlink")
+async def unlink_invoice_vendor(invoice_id: str, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Unlink an invoice from its vendor"""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        old_vendor_id = invoice.vendor_id
+        invoice.vendor_id = None
+        invoice.vendor_match_confidence = 0.0
+        invoice.updated_at = datetime.utcnow()
+        db.commit()
+        log_audit("invoice_vendor_unlinked", user, entity_type="invoice", entity_id=invoice_id,
+                  description=f"Invoice {invoice.invoice_number} unlinked from vendor", company_id=company['id'])
+        return {"message": "Invoice unlinked from vendor"}
+
+
 # ─── Chart of Accounts ───────────────────────────────────
 
 
@@ -1826,6 +2036,8 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "tds_amount": invoice.tds_amount,
         "tds_paid_to_mra": invoice.tds_paid_to_mra,
         "tds_paid_date": invoice.tds_paid_date,
+        "vendor_id": invoice.vendor_id,
+        "vendor_match_confidence": invoice.vendor_match_confidence,
         "created_at": invoice.created_at.isoformat() if invoice.created_at else None,
         "updated_at": invoice.updated_at.isoformat() if invoice.updated_at else None,
         "has_document": bool(invoice.source_file and Path(invoice.source_file).exists()),
@@ -1866,6 +2078,26 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
             tds_applicable=extracted.get("tds_applicable", False),
             tds_rate=extracted.get("tds_rate", 0.0) if extracted.get("tds_applicable") else 0.0,
         )
+
+        # Auto-match vendor from vendor master (hybrid: match if confidence >= 0.8)
+        vendor_name = extracted.get("vendor_name") or ""
+        if vendor_name and company_id:
+            matched_id, confidence = _fuzzy_match_vendor(vendor_name, company_id, threshold=0.8)
+            if matched_id:
+                invoice.vendor_id = matched_id
+                invoice.vendor_match_confidence = confidence
+                # Apply vendor defaults
+                vendor = db.query(Vendor).filter(Vendor.id == matched_id).first()
+                if vendor:
+                    if vendor.default_tds_rate > 0 and not invoice.tds_applicable:
+                        invoice.tds_applicable = True
+                        invoice.tds_rate = vendor.default_tds_rate
+                    if vendor.brn and not invoice.vendor_brn:
+                        invoice.vendor_brn = vendor.brn
+                    if vendor.vat and not invoice.vendor_vat:
+                        invoice.vendor_vat = vendor.vat
+                logger.info(f"🔗 Vendor auto-matched: '{vendor_name}' → vendor_id={matched_id} (confidence={confidence:.2f})")
+
         db.add(invoice)
         
         # Save line items

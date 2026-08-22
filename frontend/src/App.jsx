@@ -8,6 +8,7 @@ import {
   exportJournalEntriesSage200,
   updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
   getAuditLog,
+  getVendors, createVendor, updateVendor, deleteVendor, linkInvoiceVendor, unlinkInvoiceVendor,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
@@ -72,6 +73,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'invoices', label: 'Invoices', icon: Icons.FileText },
     { id: 'entries', label: 'Journal Entries', icon: Icons.Book },
     { id: 'accounts', label: 'Chart of Accounts', icon: Icons.List },
+    { id: 'vendors', label: 'Vendors', icon: Icons.Users },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
     { id: 'tds', label: 'TDS Register', icon: Icons.Dollar },
     ...(isAdmin ? [{ id: 'audit', label: 'Audit Log', icon: Icons.List }] : []),
@@ -708,6 +710,32 @@ function TdsOverride({ invoice, onUpdate }) {
   );
 }
 
+function VendorLinkDropdown({ invoiceId, onLinked }) {
+  const [vendors, setVendors] = useState([]);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => { getVendors().then(r => setVendors(r.vendors || [])).catch(() => {}); }, []);
+
+  const handleLink = async (vendorId, vendorName) => {
+    try { await linkInvoiceVendor(invoiceId, vendorId); setShow(false); onLinked(); }
+    catch (e) { alert(e.message); }
+  };
+
+  if (!show) {
+    return <button className="btn btn-sm" onClick={() => setShow(true)}>Link Vendor</button>;
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <select className="input" style={{ width: 200, fontSize: 13 }} onChange={(e) => { if (e.target.value) handleLink(parseInt(e.target.value)); }} defaultValue="">
+        <option value="">Select vendor...</option>
+        {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+      </select>
+      <button className="btn btn-sm" style={{ marginLeft: 4 }} onClick={() => setShow(false)}>Cancel</button>
+    </div>
+  );
+}
+
 function InvoiceDetail({ invoiceId, onNavigate }) {
   const [inv, setInv] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -772,6 +800,25 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
           {[['Type', inv.invoice_type], ['Invoice #', inv.invoice_number], ['Date', inv.invoice_date], ['Due Date', inv.due_date], ['Currency', inv.currency], ['Project', inv.project_code], ['Cost Center', inv.cost_center], ['Confidence', `${((inv.confidence_score || 0) * 100).toFixed(0)}%`]].map(([l, v], i) => (
             <div key={i} className="detail-row"><span className="detail-label">{l}</span><span className="detail-value">{v || '-'}</span></div>
           ))}
+          {/* Vendor link */}
+          <div className="detail-row">
+            <span className="detail-label">Vendor Master</span>
+            <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {inv.vendor_id ? (
+                <>
+                  <span className="badge badge-posted" style={{ fontSize: 11 }}>
+                    Linked {inv.vendor_match_confidence < 1.0 ? `(${(inv.vendor_match_confidence * 100).toFixed(0)}% auto)` : '(manual)'}
+                  </span>
+                  <button className="btn btn-sm" onClick={() => { unlinkInvoiceVendor(invoiceId).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message)); }}>Unlink</button>
+                </>
+              ) : (
+                <>
+                  <span className="text-muted text-xs">Not linked</span>
+                  <VendorLinkDropdown invoiceId={invoiceId} onLinked={() => getInvoice(invoiceId).then(setInv)} />
+                </>
+              )}
+            </span>
+          </div>
         </div>
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Amounts</h3>
@@ -1185,6 +1232,106 @@ function TdsRegister() {
   );
 }
 
+function VendorMaster() {
+  const [vendors, setVendors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name: '', aliases: '', brn: '', vat: '', default_tds_rate: 0, payment_terms: '' });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await getVendors(search || undefined); setVendors(r.vendors || []); }
+    catch (e) { console.error(e); } finally { setLoading(false); }
+  }, [search]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSubmit = async () => {
+    try {
+      const data = { ...form, aliases: form.aliases ? form.aliases.split(',').map(s => s.trim()).filter(Boolean) : [] };
+      if (editing) {
+        await updateVendor(editing, data);
+      } else {
+        await createVendor(data);
+      }
+      setShowForm(false); setEditing(null);
+      setForm({ name: '', aliases: '', brn: '', vat: '', default_tds_rate: 0, payment_terms: '' });
+      load();
+    } catch (e) { alert(e.message); }
+  };
+
+  const handleEdit = (v) => {
+    setEditing(v.id);
+    setForm({ name: v.name, aliases: (v.aliases || []).join(', '), brn: v.brn || '', vat: v.vat || '', default_tds_rate: v.default_tds_rate || 0, payment_terms: v.payment_terms || '' });
+    setShowForm(true);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this vendor? Invoices linked to it will be unlinked.')) return;
+    try { await deleteVendor(id); load(); } catch (e) { alert(e.message); }
+  };
+
+  return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header">
+        <h2>Vendors <span className="count">({vendors.length})</span></h2>
+        <button className="btn btn-primary" onClick={() => { setEditing(null); setForm({ name: '', aliases: '', brn: '', vat: '', default_tds_rate: 0, payment_terms: '' }); setShowForm(true); }}>+ Add Vendor</button>
+      </div>
+
+      <input className="input" style={{ width: 260 }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search vendors..." />
+
+      {showForm && (
+        <div className="card" style={{ padding: 20 }}>
+          <h3 style={{ marginBottom: 16 }}>{editing ? 'Edit Vendor' : 'New Vendor'}</h3>
+          <div className="form-grid">
+            <div><label className="input-label">Name</label><input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Vendor name" /></div>
+            <div><label className="input-label">Aliases (comma-separated)</label><input className="input" value={form.aliases} onChange={(e) => setForm({ ...form, aliases: e.target.value })} placeholder="PwC, PWC, PricewaterhouseCoopers" /></div>
+            <div><label className="input-label">BRN</label><input className="input" value={form.brn} onChange={(e) => setForm({ ...form, brn: e.target.value })} /></div>
+            <div><label className="input-label">VAT</label><input className="input" value={form.vat} onChange={(e) => setForm({ ...form, vat: e.target.value })} /></div>
+            <div><label className="input-label">Default TDS Rate (%)</label><input type="number" step="0.1" className="input" value={form.default_tds_rate} onChange={(e) => setForm({ ...form, default_tds_rate: parseFloat(e.target.value) || 0 })} /></div>
+            <div><label className="input-label">Payment Terms</label><input className="input" value={form.payment_terms} onChange={(e) => setForm({ ...form, payment_terms: e.target.value })} placeholder="Net 30" /></div>
+          </div>
+          <div className="btn-group" style={{ marginTop: 16 }}>
+            <button className="btn btn-primary" onClick={handleSubmit} disabled={!form.name}>{editing ? 'Update' : 'Create'}</button>
+            <button className="btn" onClick={() => { setShowForm(false); setEditing(null); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <Loading /> : (
+        <div className="card">
+          <table className="data-table">
+            <thead><tr><th>Name</th><th>BRN</th><th>VAT</th><th>TDS %</th><th>Terms</th><th>Actions</th></tr></thead>
+            <tbody>
+              {vendors.map(v => (
+                <tr key={v.id}>
+                  <td style={{ fontWeight: 500 }}>
+                    {v.name}
+                    {(v.aliases || []).length > 0 && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>aka {v.aliases.join(', ')}</span>}
+                  </td>
+                  <td className="mono text-xs">{v.brn || '-'}</td>
+                  <td className="mono text-xs">{v.vat || '-'}</td>
+                  <td className="mono text-sm">{v.default_tds_rate > 0 ? `${v.default_tds_rate}%` : '-'}</td>
+                  <td className="text-xs">{v.payment_terms || '-'}</td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn btn-sm" onClick={() => handleEdit(v)}>Edit</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => handleDelete(v.id)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {vendors.length === 0 && <tr><td colSpan={6}><Empty text="No vendors yet. Add your first vendor to enable auto-matching." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AppLayout() {
   const { user, logout, isAdmin, selectedCompany, selectCompany } = useAuth();
   const navigate = useNavigate();
@@ -1270,6 +1417,7 @@ function AppLayout() {
         {view === 'detail' && <InvoiceDetail invoiceId={selectedId} onNavigate={nav} />}
         {view === 'entries' && <JournalEntries />}
         {view === 'accounts' && <ChartOfAccounts />}
+        {view === 'vendors' && <VendorMaster />}
         {view === 'rules' && <LearnedRules />}
         {view === 'tds' && <TdsRegister />}
         {view === 'audit' && isAdmin() && <AuditLog />}

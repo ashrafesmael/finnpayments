@@ -241,3 +241,13 @@ export const getAuditLog = (params = {}) => {
   const query = new URLSearchParams(params).toString();
   return apiRequest(`/audit-log${query ? '?' + query : ''}`);
 };
+
+// ─── Vendor Master ──────────────────────────────────────
+export const getVendors = (search) => apiRequest(`/vendors${search ? '?search=' + search : ''}`);
+export const createVendor = (data) => apiRequest('/vendors', { method: 'POST', body: JSON.stringify(data) });
+export const updateVendor = (id, data) => apiRequest(`/vendors/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteVendor = (id) => apiRequest(`/vendors/${id}`, { method: 'DELETE' });
+export const linkInvoiceVendor = (invoiceId, vendorId) =>
+  apiRequest(`/invoices/${invoiceId}/vendor`, { method: 'PATCH', body: JSON.stringify({ vendor_id: vendorId }) });
+export const unlinkInvoiceVendor = (invoiceId) =>
+  apiRequest(`/invoices/${invoiceId}/vendor/unlink`, { method: 'PATCH' });
