@@ -103,12 +103,13 @@ export const getInvoices = (params = {}) => {
 
 export const getInvoice = (invoiceId) => apiRequest(`/invoices/${invoiceId}`);
 
-export const uploadInvoice = async (file, invoiceType = 'supplier', projectCode = '', costCenter = '') => {
+export const uploadInvoice = async (file, invoiceType = 'supplier', projectCode = '', costCenter = '', assignedTo = '') => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('invoice_type', invoiceType);
   if (projectCode) formData.append('project_code', projectCode);
   if (costCenter) formData.append('cost_center', costCenter);
+  if (assignedTo) formData.append('assigned_to', assignedTo);
   return apiRequest('/invoices/upload', { method: 'POST', body: formData });
 };
 
@@ -251,6 +252,10 @@ export const linkInvoiceVendor = (invoiceId, vendorId) =>
   apiRequest(`/invoices/${invoiceId}/vendor`, { method: 'PATCH', body: JSON.stringify({ vendor_id: vendorId }) });
 export const unlinkInvoiceVendor = (invoiceId) =>
   apiRequest(`/invoices/${invoiceId}/vendor/unlink`, { method: 'PATCH' });
+
+// ─── Invoice Assignment ─────────────────────────────────
+export const assignInvoice = (invoiceId, userId) =>
+  apiRequest(`/invoices/${invoiceId}/assign`, { method: 'PATCH', body: JSON.stringify({ assigned_to: userId }) });
 
 // ─── Recurring Invoices ─────────────────────────────────
 export const getRecurringTemplates = () => apiRequest('/recurring/templates');

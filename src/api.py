@@ -163,7 +163,9 @@ async def upload_invoice(
     invoice_type: str = Form("supplier"),
     project_code: Optional[str] = Form(None),
     cost_center: Optional[str] = Form(None),
+    assigned_to: Optional[str] = Form(None),
     company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
 ):
     """
     Upload an invoice document for processing.
@@ -198,7 +200,7 @@ async def upload_invoice(
         logger.info(f"📋 Multi-invoice upload: {len(result)} invoices detected")
         for r in result:
             try:
-                _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center, company['id'])
+                _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center, company['id'], uploader_user_id=assigned_to or user['id'])
                 results_store[r["invoice_id"]] = r
             except Exception as e:
                 logger.error(f"❌ Database save error for {r['invoice_id']}: {e}")
@@ -214,7 +216,7 @@ async def upload_invoice(
     
     # Single invoice
     try:
-        _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center, company['id'])
+        _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center, company['id'], uploader_user_id=assigned_to or user['id'])
     except Exception as e:
         logger.error(f"❌ Database save error: {e}")
     
@@ -281,7 +283,7 @@ async def create_manual_invoice(request: InvoiceCreateRequest, company: dict = D
         "message": "Manual invoice created successfully"
     }
     
-    _save_invoice_to_db(result, request.invoice_type.value, None, request.project_code, request.cost_center, company['id'])
+    _save_invoice_to_db(result, request.invoice_type.value, None, request.project_code, request.cost_center, company['id'], uploader_user_id=user['id'])
     results_store[invoice_id] = result
     
     return result
@@ -495,47 +497,35 @@ async def update_invoice_status(
             company_id=company['id'],
         )
 
-        # ── Send workflow notifications ──
+        # ── Send targeted workflow notifications ──
         login_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
         from src.auth_models import auth_db as _auth_db
-        company_users = _auth_db.get_users_for_company(company['id'])
+
+        def notify_user(user_id, send_func):
+            """Send notification to a specific user."""
+            if not user_id:
+                return
+            notifee = _auth_db.get_user_by_id(user_id)
+            if not notifee or notifee['status'] != 'approved':
+                return
+            if user_id == user['id']:
+                return  # Don't notify the action performer
+            send_func(notifee['email'], notifee['full_name'],
+                      invoice.invoice_number, invoice.vendor_name,
+                      invoice.total_amount, invoice.currency, login_url)
 
         if status == "approved":
-            # Notify all company users (except the approver if maker/checker) that the invoice is ready for posting
-            for cu in company_users:
-                if company.get('maker_checker_enabled') and cu['id'] == user['id']:
-                    continue  # Skip the approver (maker/checker)
-                if cu['status'] != 'approved':
-                    continue
-                email_service.send_invoice_approved(
-                    cu['email'], cu['full_name'],
-                    invoice.invoice_number, invoice.vendor_name,
-                    invoice.total_amount, invoice.currency, login_url
-                )
+            # Notify the assigned user that the invoice is ready for posting
+            notify_user(invoice.assigned_to, email_service.send_invoice_approved)
 
         elif status == "rejected":
-            # Notify the user who uploaded/approved it
-            for cu in company_users:
-                if cu['status'] != 'approved':
-                    continue
-                email_service.send_invoice_rejected(
-                    cu['email'], cu['full_name'],
-                    invoice.invoice_number, invoice.vendor_name,
-                    invoice.total_amount, invoice.currency
-                )
+            # Notify the user who uploaded it (if different from rejector)
+            notify_user(invoice.assigned_to, lambda e, n, inv, ven, amt, cur, url=None:
+                email_service.send_invoice_rejected(e, n, inv, ven, amt, cur))
 
         elif status == "posted":
-            # Notify company users that the invoice is posted and ready for payment
-            for cu in company_users:
-                if cu['id'] == user['id']:
-                    continue
-                if cu['status'] != 'approved':
-                    continue
-                email_service.send_invoice_posted(
-                    cu['email'], cu['full_name'],
-                    invoice.invoice_number, invoice.vendor_name,
-                    invoice.total_amount, invoice.currency, login_url
-                )
+            # Notify the assigned user that the invoice is posted and ready for payment
+            notify_user(invoice.assigned_to, email_service.send_invoice_posted)
 
         return {
             "invoice_id": invoice_id,
@@ -1637,6 +1627,31 @@ async def unlink_invoice_vendor(invoice_id: str, company: dict = Depends(get_cur
         return {"message": "Invoice unlinked from vendor"}
 
 
+class AssignRequest(PydanticBaseModel):
+    assigned_to: str  # user_id
+
+
+@app.patch("/invoices/{invoice_id}/assign")
+async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Assign an invoice to a specific user for approval/posting."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        # Verify the assigned user has access to this company
+        from src.auth_models import auth_db as _auth_db
+        if not _auth_db.user_has_company_access(request.assigned_to, company['id']):
+            raise HTTPException(status_code=400, detail="User does not have access to this company")
+        assignee = _auth_db.get_user_by_id(request.assigned_to)
+        old_assignee = invoice.assigned_to
+        invoice.assigned_to = request.assigned_to
+        invoice.updated_at = datetime.utcnow()
+        db.commit()
+        log_audit("invoice_assigned", user, entity_type="invoice", entity_id=invoice_id,
+                  description=f"Invoice {invoice.invoice_number} assigned to {assignee['email'] if assignee else request.assigned_to}", company_id=company['id'])
+        return {"message": f"Invoice assigned to {assignee['full_name'] if assignee else 'user'}", "assigned_to": request.assigned_to}
+
+
 # ─── Recurring Invoices ─────────────────────────────────
 
 class RecurringTemplateCreate(PydanticBaseModel):
@@ -2640,6 +2655,7 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "tds_paid_date": invoice.tds_paid_date,
         "vendor_id": invoice.vendor_id,
         "vendor_match_confidence": invoice.vendor_match_confidence,
+        "assigned_to": invoice.assigned_to,
         "exchange_rate": invoice.exchange_rate,
         "total_amount_base": invoice.total_amount_base,
         "payment_bank_rate": invoice.payment_bank_rate,
@@ -2651,7 +2667,7 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
     }
 
 
-def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str], project_code: Optional[str], cost_center: Optional[str], company_id: str = None):
+def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str], project_code: Optional[str], cost_center: Optional[str], company_id: str = None, uploader_user_id: str = None):
     """Save processed invoice and its entries to the database"""
     extracted = result.get("extracted_data", {})
     invoice_id = result["invoice_id"]
@@ -2684,6 +2700,7 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
             company_id=company_id,
             tds_applicable=extracted.get("tds_applicable", False),
             tds_rate=extracted.get("tds_rate", 0.0) if extracted.get("tds_applicable") else 0.0,
+            assigned_to=uploader_user_id,  # default assign to uploader
         )
 
         # Multi-currency: convert to base (MUR) at booking

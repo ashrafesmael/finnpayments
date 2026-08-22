@@ -9,6 +9,7 @@ import {
   updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
   getAuditLog,
   getVendors, createVendor, updateVendor, deleteVendor, linkInvoiceVendor, unlinkInvoiceVendor,
+  assignInvoice,
   getRecurringTemplates, createRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate, toggleRecurringTemplate, generateRecurringNow, toggleRecurringCompany,
   getExchangeRates, updateExchangeRate, refreshExchangeRates, settlePayment,
   getInvoiceDocumentUrl,
@@ -259,17 +260,29 @@ function InvoiceUpload({ onNavigate }) {
   const [invoiceType, setInvoiceType] = useState('supplier');
   const [projectCode, setProjectCode] = useState('');
   const [costCenter, setCostCenter] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [companyUsers, setCompanyUsers] = useState([]);
   const ref = useRef(null);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    const API_URL = import.meta.env.VITE_API_URL || '';
+    const token = localStorage.getItem('auth_token');
+    fetch(`${API_URL}/auth/admin/users`, { headers: { 'Authorization': 'Bearer ' + token } })
+      .then(r => r.ok ? r.json() : [])
+      .then(users => setCompanyUsers(users.filter(u => u.status === 'approved')))
+      .catch(() => {});
+  }, []);
 
   const handleDrop = useCallback((e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }, []);
 
   const handleUpload = async () => {
     if (!file) return;
     setUploading(true); setError(null);
-    try { setResult(await uploadInvoice(file, invoiceType, projectCode, costCenter)); }
+    try { setResult(await uploadInvoice(file, invoiceType, projectCode, costCenter, assignedTo)); }
     catch (err) { setError(err.message); }
     finally { setUploading(false); }
   };
@@ -319,6 +332,18 @@ function InvoiceUpload({ onNavigate }) {
         <div>
           <label className="input-label">Cost Center</label>
           <input className="input" value={costCenter} onChange={(e) => setCostCenter(e.target.value)} placeholder="e.g. ADMIN" />
+        </div>
+      </div>
+
+      <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
+        <div>
+          <label className="input-label">Assign To (for approval)</label>
+          <select className="input" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+            <option value="">Myself (default)</option>
+            {companyUsers.filter(u => u.id !== user?.id).map(u => (
+              <option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -714,6 +739,42 @@ function TdsOverride({ invoice, onUpdate }) {
   );
 }
 
+function AssigneeDropdown({ currentAssignee, onAssign }) {
+  const [users, setUsers] = useState([]);
+  const [show, setShow] = useState(false);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    const API_URL = import.meta.env.VITE_API_URL || '';
+    const token = localStorage.getItem('auth_token');
+    fetch(`${API_URL}/auth/admin/users`, { headers: { 'Authorization': 'Bearer ' + token } })
+      .then(r => r.ok ? r.json() : [])
+      .then(u => setUsers(u.filter(x => x.status === 'approved')))
+      .catch(() => {});
+  }, []);
+
+  const assignee = users.find(u => u.id === currentAssignee);
+
+  if (!show) {
+    return (
+      <>
+        <span className="text-sm">{assignee ? assignee.full_name : currentAssignee === user?.id ? 'You' : 'Unassigned'}</span>
+        <button className="btn btn-sm" onClick={() => setShow(true)}>Reassign</button>
+      </>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      <select className="input" style={{ width: 200, fontSize: 13 }} defaultValue={currentAssignee || ''} onChange={(e) => { if (e.target.value) { onAssign(e.target.value); setShow(false); } }}>
+        <option value="">Select user...</option>
+        {users.map(u => <option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>)}
+      </select>
+      <button className="btn btn-sm" onClick={() => setShow(false)}>Cancel</button>
+    </div>
+  );
+}
+
 function PaymentSettlementForm({ inv, onSettle, onCancel }) {
   const [bankRate, setBankRate] = useState(inv.exchange_rate || 1.0);
   const [bankCharges, setBankCharges] = useState(0);
@@ -881,6 +942,16 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
                   <VendorLinkDropdown invoiceId={invoiceId} onLinked={() => getInvoice(invoiceId).then(setInv)} />
                 </>
               )}
+            </span>
+          </div>
+          {/* Assignee */}
+          <div className="detail-row">
+            <span className="detail-label">Assigned To</span>
+            <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <AssigneeDropdown
+                currentAssignee={inv.assigned_to}
+                onAssign={(userId) => assignInvoice(invoiceId, userId).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message))}
+              />
             </span>
           </div>
         </div>

@@ -84,6 +84,9 @@ class Invoice(Base):
     vendor_id = Column(Integer, index=True)
     vendor_match_confidence = Column(Float, default=0.0)
 
+    # Assignment (who should approve/post next)
+    assigned_to = Column(String(50), index=True)  # user_id
+
     # Multi-currency / FX
     exchange_rate = Column(Float, default=1.0)  # rate at booking
     total_amount_base = Column(Float, default=0.0)  # converted to MUR
@@ -374,6 +377,11 @@ def _migrate_business_db():
         if not column_exists("invoices", col):
             cursor.execute(f"ALTER TABLE invoices ADD COLUMN {col} {coltype}")
             logger.info(f"✅ Added {col} column to invoices")
+
+    # Add assigned_to column to invoices
+    if not column_exists("invoices", "assigned_to"):
+        cursor.execute("ALTER TABLE invoices ADD COLUMN assigned_to TEXT")
+        logger.info("✅ Added assigned_to column to invoices")
 
     conn.commit()
 
