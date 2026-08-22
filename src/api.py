@@ -252,6 +252,29 @@ async def upload_invoice(
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")
 
+    # If assigned to someone other than uploader and DocuSeal is configured, create e-signature envelope
+    if assigned_to and assigned_to != user['id'] and docuseal_configured():
+        try:
+            from src.auth_models import auth_db as _auth_db
+            assignee = _auth_db.get_user_by_id(assigned_to)
+            if assignee and assignee['status'] == 'approved':
+                doc_path = str(file_path) if file_path and os.path.exists(str(file_path)) else None
+                envelope = await create_approval_envelope(
+                    invoice_id=result["invoice_id"],
+                    invoice_number=extracted.get("invoice_number", result["invoice_id"]),
+                    vendor_name=extracted.get("vendor_name", "Unknown"),
+                    amount=extracted.get("total_amount", 0),
+                    currency=extracted.get("currency", "MUR"),
+                    approver_email=assignee['email'],
+                    approver_name=assignee['full_name'],
+                    document_path=doc_path,
+                )
+                if envelope:
+                    log_audit("docuseal_envelope_created", user, entity_type="invoice", entity_id=result["invoice_id"],
+                              description=f"DocuSeal envelope created for {extracted.get('invoice_number', result['invoice_id'])} (submission_id={envelope.get('id')})", company_id=company['id'])
+        except Exception as e:
+            logger.error(f"Failed to create DocuSeal envelope on upload: {e}")
+
     return result
 
 
