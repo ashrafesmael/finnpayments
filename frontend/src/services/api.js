@@ -261,3 +261,13 @@ export const toggleRecurringTemplate = (id) => apiRequest(`/recurring/templates/
 export const generateRecurringNow = (id) => apiRequest(`/recurring/generate-now/${id}`, { method: 'POST' });
 export const toggleRecurringCompany = (companyId, enabled) =>
   apiRequest(`/auth/admin/companies/${companyId}/recurring`, { method: 'PUT', body: JSON.stringify({ enabled }) });
+
+// ─── Exchange Rates ─────────────────────────────────────
+export const getExchangeRates = () => apiRequest('/exchange-rates');
+export const updateExchangeRate = (currency, rateToMur) =>
+  apiRequest('/exchange-rates', { method: 'PUT', body: JSON.stringify({ currency, rate_to_mur: rateToMur }) });
+export const refreshExchangeRates = () => apiRequest('/exchange-rates/refresh', { method: 'POST' });
+
+// ─── Payment Settlement (FX) ────────────────────────────
+export const settlePayment = (invoiceId, bankRate, bankCharges, paymentDate) =>
+  apiRequest(`/invoices/${invoiceId}/settle-payment`, { method: 'POST', body: JSON.stringify({ bank_rate: bankRate, bank_charges: bankCharges, payment_date: paymentDate }) });

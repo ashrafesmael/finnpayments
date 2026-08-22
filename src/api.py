@@ -31,7 +31,8 @@ from src.models import (
 from src.database import (
     init_db, get_db, Invoice, InvoiceLineItemDB,
     JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule,
-    TDSRate, SessionLocal, AuditLog, Vendor, RecurringTemplate
+    TDSRate, SessionLocal, AuditLog, Vendor, RecurringTemplate,
+    ExchangeRate, get_exchange_rate, fetch_exchange_rates
 )
 from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
@@ -1890,6 +1891,221 @@ async def generate_recurring_now(template_id: int, company: dict = Depends(get_c
         return {"invoice_id": invoice_id, "message": f"Invoice generated from template '{template.name}'"}
 
 
+# ─── Exchange Rates ──────────────────────────────────────
+
+@app.get("/exchange-rates")
+async def list_exchange_rates(company: dict = Depends(get_current_company)):
+    """List all exchange rates (global)"""
+    with get_db() as db:
+        rates = db.query(ExchangeRate).order_by(ExchangeRate.currency, ExchangeRate.date.desc()).all()
+        # Return latest rate per currency
+        seen = {}
+        for r in rates:
+            if r.currency not in seen:
+                seen[r.currency] = {
+                    "id": r.id,
+                    "currency": r.currency,
+                    "rate_to_mur": r.rate_to_mur,
+                    "date": r.date,
+                    "source": r.source,
+                }
+        return {"rates": list(seen.values())}
+
+
+class ExchangeRateUpdate(PydanticBaseModel):
+    currency: str
+    rate_to_mur: float
+
+
+@app.put("/exchange-rates")
+async def update_exchange_rate(rate_data: ExchangeRateUpdate, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Update an exchange rate (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    from datetime import date
+    today = date.today().isoformat()
+    with get_db() as db:
+        existing = db.query(ExchangeRate).filter(
+            ExchangeRate.currency == rate_data.currency.upper(),
+            ExchangeRate.date == today
+        ).first()
+        if existing:
+            existing.rate_to_mur = rate_data.rate_to_mur
+            existing.source = "manual"
+        else:
+            db.add(ExchangeRate(
+                currency=rate_data.currency.upper(),
+                rate_to_mur=rate_data.rate_to_mur,
+                date=today,
+                source="manual",
+            ))
+        db.commit()
+        return {"message": f"Rate updated: {rate_data.currency.upper()} = {rate_data.rate_to_mur} MUR"}
+
+
+@app.post("/exchange-rates/refresh")
+async def refresh_exchange_rates(company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Fetch latest exchange rates from FX API (admin only)"""
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    success = fetch_exchange_rates()
+    if not success:
+        raise HTTPException(status_code=502, detail="Failed to fetch exchange rates from API")
+    return {"message": "Exchange rates refreshed"}
+
+
+# ─── Payment Settlement (with FX + bank charges) ────────
+
+class PaymentSettlementRequest(PydanticBaseModel):
+    bank_rate: float = 0.0  # actual bank rate (0 = same as booking rate, i.e., MUR invoice)
+    bank_charges: float = 0.0  # bank charges in MUR
+    payment_date: str  # YYYY-MM-DD
+
+
+@app.post("/invoices/{invoice_id}/settle-payment")
+async def settle_payment(
+    invoice_id: str,
+    request: PaymentSettlementRequest,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Settle a foreign-currency invoice payment with bank rate + charges.
+    Generates FX gain/loss + bank charge journal entries. Only for non-MUR invoices."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status != "posted":
+            raise HTTPException(status_code=400, detail="Invoice must be posted before payment")
+        if invoice.currency.upper() == "MUR":
+            raise HTTPException(status_code=400, detail="Payment settlement form is for foreign-currency invoices only. Use status update for MUR.")
+
+        booked_rate = invoice.exchange_rate or 1.0
+        bank_rate = request.bank_rate if request.bank_rate > 0 else booked_rate
+        total_foreign = invoice.total_amount
+        booked_base = round(total_foreign * booked_rate, 2)
+        actual_base = round(total_foreign * bank_rate, 2)
+        bank_charges = request.bank_charges
+        total_bank_debit = round(actual_base + bank_charges, 2)
+        fx_diff = round(actual_base - booked_base, 2)
+
+        invoice.payment_bank_rate = bank_rate
+        invoice.payment_bank_charges = bank_charges
+        invoice.payment_date = request.payment_date
+        invoice.status = "paid"
+
+        from src.invoice_engine import generate_entry_id
+        from src.accounting_engine import ACCOUNT_MAPPINGS
+        mapping = ACCOUNT_MAPPINGS.get(invoice.invoice_type, ACCOUNT_MAPPINGS["supplier"])
+        payable_code, payable_name = mapping["payable"]
+        bank_code, bank_name = "01-3000-01", "Bank"
+        fx_loss_code, fx_loss_name = "01-6303-07", "Foreign Exchange Loss"
+        fx_gain_code, fx_gain_name = "01-6304-07", "Foreign Exchange Gain"
+        charges_code, charges_name = "01-6301-07", "Bank Charges"
+
+        settlement_entry_id = generate_entry_id()
+        total_debit = booked_base
+        total_credit = total_bank_debit
+        if fx_diff > 0:  # FX loss
+            total_debit = booked_base + fx_diff + bank_charges
+            total_credit = total_bank_debit
+        elif fx_diff < 0:  # FX gain
+            total_debit = booked_base + bank_charges
+            total_credit = total_bank_debit + abs(fx_diff)
+        else:
+            total_debit = booked_base + bank_charges
+            total_credit = total_bank_debit
+
+        # Ensure balanced
+        adjustment = round(total_debit - total_credit, 2)
+        if adjustment != 0:
+            if adjustment > 0:
+                total_credit += adjustment
+            else:
+                total_debit += abs(adjustment)
+
+        settlement = JournalEntryDB(
+            entry_id=settlement_entry_id,
+            invoice_id=invoice.invoice_id,
+            entry_date=request.payment_date,
+            reference=f"PAY-{invoice.invoice_number}",
+            description=f"Payment settlement for {invoice.vendor_name} - {invoice.invoice_number} ({invoice.currency})",
+            total_debit=total_debit,
+            total_credit=total_credit,
+            is_balanced=True,
+            status="posted",
+            created_by=user['email'],
+            posted_by=user['id'],
+            company_id=company['id'],
+        )
+        db.add(settlement)
+
+        # Dr Trade Creditors (booked amount)
+        db.add(JournalEntryLineDB(
+            entry_id=settlement_entry_id,
+            account_code=payable_code,
+            account_name=payable_name,
+            description=f"Settlement of {invoice.invoice_number} - {invoice.vendor_name} (booked at {booked_rate})",
+            debit=booked_base,
+            credit=0.0,
+        ))
+        # Dr/Cr FX difference
+        if fx_diff > 0:
+            db.add(JournalEntryLineDB(
+                entry_id=settlement_entry_id,
+                account_code=fx_loss_code,
+                account_name=fx_loss_name,
+                description=f"FX loss on {invoice.invoice_number} (booked {booked_rate}, paid {bank_rate})",
+                debit=fx_diff,
+                credit=0.0,
+            ))
+        elif fx_diff < 0:
+            db.add(JournalEntryLineDB(
+                entry_id=settlement_entry_id,
+                account_code=fx_gain_code,
+                account_name=fx_gain_name,
+                description=f"FX gain on {invoice.invoice_number} (booked {booked_rate}, paid {bank_rate})",
+                debit=0.0,
+                credit=abs(fx_diff),
+            ))
+        # Dr Bank charges
+        if bank_charges > 0:
+            db.add(JournalEntryLineDB(
+                entry_id=settlement_entry_id,
+                account_code=charges_code,
+                account_name=charges_name,
+                description=f"Bank charges on payment for {invoice.invoice_number}",
+                debit=bank_charges,
+                credit=0.0,
+            ))
+        # Cr Bank (total actual debit)
+        db.add(JournalEntryLineDB(
+            entry_id=settlement_entry_id,
+            account_code=bank_code,
+            account_name=bank_name,
+            description=f"Bank payment to {invoice.vendor_name} for {invoice.invoice_number}",
+            debit=0.0,
+            credit=total_bank_debit,
+        ))
+
+        db.commit()
+        log_audit("invoice_paid_fx", user, entity_type="invoice", entity_id=invoice_id,
+                  description=f"Payment settled: {invoice.invoice_number} ({invoice.currency}) - booked {booked_base}, actual {actual_base}, FX {'loss' if fx_diff > 0 else 'gain'} {abs(fx_diff)}, bank charges {bank_charges}",
+                  company_id=company['id'])
+
+        return {
+            "invoice_id": invoice_id,
+            "message": "Payment settled with FX adjustment",
+            "booked_base": booked_base,
+            "actual_base": actual_base,
+            "fx_diff": fx_diff,
+            "fx_type": "loss" if fx_diff > 0 else "gain" if fx_diff < 0 else "none",
+            "bank_charges": bank_charges,
+            "total_bank_debit": total_bank_debit,
+            "settlement_entry_id": settlement_entry_id,
+        }
+
+
 # ─── Chart of Accounts ───────────────────────────────────
 
 
@@ -2307,8 +2523,8 @@ async def get_dashboard_stats(
             Invoice.invoice_type == "client",
             Invoice.status.in_(active_statuses)
         )
-        payable = payable_q.with_entities(func.sum(Invoice.total_amount)).scalar() or 0.0
-        receivable = receivable_q.with_entities(func.sum(Invoice.total_amount)).scalar() or 0.0
+        payable = payable_q.with_entities(func.sum(Invoice.total_amount_base)).scalar() or 0.0
+        receivable = receivable_q.with_entities(func.sum(Invoice.total_amount_base)).scalar() or 0.0
 
         # Recent invoices (always show latest regardless of period for navigation)
         recent_q = db.query(Invoice).filter(Invoice.company_id == company['id'])
@@ -2360,6 +2576,11 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "tds_paid_date": invoice.tds_paid_date,
         "vendor_id": invoice.vendor_id,
         "vendor_match_confidence": invoice.vendor_match_confidence,
+        "exchange_rate": invoice.exchange_rate,
+        "total_amount_base": invoice.total_amount_base,
+        "payment_bank_rate": invoice.payment_bank_rate,
+        "payment_bank_charges": invoice.payment_bank_charges,
+        "payment_date": invoice.payment_date,
         "created_at": invoice.created_at.isoformat() if invoice.created_at else None,
         "updated_at": invoice.updated_at.isoformat() if invoice.updated_at else None,
         "has_document": bool(invoice.source_file and Path(invoice.source_file).exists()),
@@ -2400,6 +2621,18 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
             tds_applicable=extracted.get("tds_applicable", False),
             tds_rate=extracted.get("tds_rate", 0.0) if extracted.get("tds_applicable") else 0.0,
         )
+
+        # Multi-currency: convert to base (MUR) at booking
+        currency = extracted.get("currency", "MUR")
+        total = extracted.get("total_amount", 0.0)
+        if currency and currency.upper() != "MUR":
+            invoice_date = extracted.get("invoice_date", "")
+            rate = get_exchange_rate(currency, invoice_date)
+            invoice.exchange_rate = rate
+            invoice.total_amount_base = round(total * rate, 2)
+        else:
+            invoice.exchange_rate = 1.0
+            invoice.total_amount_base = total
 
         # Auto-match vendor from vendor master (hybrid: match if confidence >= 0.8)
         vendor_name = extracted.get("vendor_name") or ""

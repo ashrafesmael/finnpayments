@@ -10,6 +10,7 @@ import {
   getAuditLog,
   getVendors, createVendor, updateVendor, deleteVendor, linkInvoiceVendor, unlinkInvoiceVendor,
   getRecurringTemplates, createRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate, toggleRecurringTemplate, generateRecurringNow, toggleRecurringCompany,
+  getExchangeRates, updateExchangeRate, refreshExchangeRates, settlePayment,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
   reclassifyInvoice,
@@ -76,6 +77,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'accounts', label: 'Chart of Accounts', icon: Icons.List },
     { id: 'vendors', label: 'Vendors', icon: Icons.Users },
     { id: 'recurring', label: 'Recurring', icon: Icons.Refresh },
+    { id: 'fxrates', label: 'Exchange Rates', icon: Icons.Dollar },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
     { id: 'tds', label: 'TDS Register', icon: Icons.Dollar },
     ...(isAdmin ? [{ id: 'audit', label: 'Audit Log', icon: Icons.List }] : []),
@@ -712,6 +714,46 @@ function TdsOverride({ invoice, onUpdate }) {
   );
 }
 
+function PaymentSettlementForm({ inv, onSettle, onCancel }) {
+  const [bankRate, setBankRate] = useState(inv.exchange_rate || 1.0);
+  const [bankCharges, setBankCharges] = useState(0);
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+
+  const bookedBase = (inv.total_amount * (inv.exchange_rate || 1.0)).toFixed(2);
+  const actualBase = (inv.total_amount * (parseFloat(bankRate) || 0)).toFixed(2);
+  const fxDiff = (actualBase - bookedBase).toFixed(2);
+  const totalBank = (parseFloat(actualBase) + parseFloat(bankCharges || 0)).toFixed(2);
+
+  return (
+    <div className="card" style={{ padding: 20, borderColor: 'var(--accent)', borderWidth: 1, borderStyle: 'solid' }}>
+      <h3 style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16 }}>Settle Payment (Foreign Currency)</h3>
+      <div className="detail-grid">
+        <div className="detail-row"><span className="detail-label">Invoice Amount</span><span className="detail-value">{fmtCurrency(inv.total_amount, inv.currency)}</span></div>
+        <div className="detail-row"><span className="detail-label">Booked Rate</span><span className="detail-value">{inv.exchange_rate || 1.0}</span></div>
+        <div className="detail-row"><span className="detail-label">Booked in MUR</span><span className="detail-value">{fmtCurrency(bookedBase)}</span></div>
+        <div className="detail-row"><span className="detail-label">Bank Rate</span><span className="detail-value"><input type="number" step="0.0001" className="input" style={{ width: 100 }} value={bankRate} onChange={(e) => setBankRate(e.target.value)} /></span></div>
+        <div className="detail-row"><span className="detail-label">Bank Charges (MUR)</span><span className="detail-value"><input type="number" step="0.01" className="input" style={{ width: 100 }} value={bankCharges} onChange={(e) => setBankCharges(e.target.value)} /></span></div>
+        <div className="detail-row"><span className="detail-label">Payment Date</span><span className="detail-value"><input type="date" className="input" style={{ width: 130 }} value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} /></span></div>
+      </div>
+      <div style={{ marginTop: 16, padding: 12, background: 'var(--bg-surface-2)', borderRadius: 8 }}>
+        <div className="detail-row"><span className="detail-label">Amount at bank rate</span><span className="detail-value mono">{fmtCurrency(actualBase)}</span></div>
+        <div className="detail-row"><span className="detail-label">Bank charges</span><span className="detail-value mono">{fmtCurrency(bankCharges || 0)}</span></div>
+        <div className="detail-row"><span className="detail-label">Total bank debit</span><span className="detail-value mono" style={{ fontWeight: 600 }}>{fmtCurrency(totalBank)}</span></div>
+        <div className="detail-row">
+          <span className="detail-label">FX {fxDiff > 0 ? 'Loss' : (fxDiff < 0 ? 'Gain' : 'None')}</span>
+          <span className="detail-value mono" style={{ color: fxDiff > 0 ? 'var(--red)' : fxDiff < 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+            {fxDiff != 0 ? fmtCurrency(Math.abs(fxDiff)) : '-'}
+          </span>
+        </div>
+      </div>
+      <div className="btn-group" style={{ marginTop: 16 }}>
+        <button className="btn btn-green" onClick={() => onSettle(parseFloat(bankRate) || 0, parseFloat(bankCharges) || 0, paymentDate)}>Settle Payment</button>
+        <button className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function VendorLinkDropdown({ invoiceId, onLinked }) {
   const [vendors, setVendors] = useState([]);
   const [show, setShow] = useState(false);
@@ -741,6 +783,7 @@ function VendorLinkDropdown({ invoiceId, onLinked }) {
 function InvoiceDetail({ invoiceId, onNavigate }) {
   const [inv, setInv] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
   const { user, selectedCompany } = useAuth();
 
   useEffect(() => { getInvoice(invoiceId).then(setInv).catch(console.error).finally(() => setLoading(false)); }, [invoiceId]);
@@ -774,8 +817,27 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
             Post to GL
           </button>
         )}
-        {inv.status === 'posted' && <button className="btn btn-green" onClick={() => changeStatus('paid')}>Mark as Paid</button>}
+        {inv.status === 'posted' && (
+          inv.currency && inv.currency.toUpperCase() !== 'MUR' ? (
+            <button className="btn btn-green" onClick={() => setShowPaymentForm(true)}>Settle Payment</button>
+          ) : (
+            <button className="btn btn-green" onClick={() => changeStatus('paid')}>Mark as Paid</button>
+          )
+        )}
       </div>
+      {showPaymentForm && inv.currency && inv.currency.toUpperCase() !== 'MUR' && (
+        <PaymentSettlementForm
+          inv={inv}
+          onSettle={async (bankRate, bankCharges, paymentDate) => {
+            try {
+              await settlePayment(inv.invoice_id, bankRate, bankCharges, paymentDate);
+              setShowPaymentForm(false);
+              setInv(await getInvoice(invoiceId));
+            } catch (e) { alert(e.message); }
+          }}
+          onCancel={() => setShowPaymentForm(false)}
+        />
+      )}
       {makerCheckerOn && inv.status === 'approved' && !canPost && (
         <div className="alert-info" style={{ fontSize: 13, padding: '10px 14px', borderRadius: 6, background: 'var(--amber-muted)', border: '1px solid var(--amber)', color: 'var(--amber)' }}>
           Maker/checker is enabled. You approved this invoice, so another user must post it to the GL.
@@ -1234,6 +1296,78 @@ function TdsRegister() {
   );
 }
 
+function ExchangeRates() {
+  const [rates, setRates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState({});
+  const { isAdmin } = useAuth();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await getExchangeRates(); setRates(r.rates || []); }
+    catch (e) { console.error(e); } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async (currency) => {
+    try { await updateExchangeRate(currency, editing[currency]); load(); setEditing({ ...editing, [currency]: undefined }); }
+    catch (e) { alert(e.message); }
+  };
+
+  const handleRefresh = async () => {
+    try { await refreshExchangeRates(); load(); }
+    catch (e) { alert(e.message); }
+  };
+
+  return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header">
+        <h2>Exchange Rates</h2>
+        {isAdmin() && <button className="btn btn-primary" onClick={handleRefresh}>Refresh from API</button>}
+      </div>
+      <p className="text-muted" style={{ fontSize: 13, marginBottom: 16 }}>
+        Global rates relative to MUR (base currency). Used for invoice conversion and FX gain/loss calculation.
+      </p>
+      {loading ? <Loading /> : (
+        <div className="card">
+          <table className="data-table">
+            <thead><tr><th>Currency</th><th>Rate (to MUR)</th><th>Date</th><th>Source</th><th>Actions</th></tr></thead>
+            <tbody>
+              {rates.map(r => (
+                <tr key={r.currency}>
+                  <td className="mono text-sm" style={{ fontWeight: 600, color: 'var(--accent)' }}>{r.currency}</td>
+                  <td>
+                    {editing[r.currency] !== undefined ? (
+                      <input type="number" step="0.0001" className="input" style={{ width: 100 }}
+                        value={editing[r.currency]} onChange={(e) => setEditing({ ...editing, [r.currency]: parseFloat(e.target.value) || 0 })} />
+                    ) : r.rate_to_mur}
+                  </td>
+                  <td className="text-xs text-muted">{r.date}</td>
+                  <td className="text-xs">{r.source}</td>
+                  <td>
+                    {isAdmin() && (
+                      editing[r.currency] !== undefined ? (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="btn btn-sm btn-primary" onClick={() => handleSave(r.currency)}>Save</button>
+                          <button className="btn btn-sm" onClick={() => setEditing({ ...editing, [r.currency]: undefined })}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button className="btn btn-sm" onClick={() => setEditing({ ...editing, [r.currency]: r.rate_to_mur })}>Edit</button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {rates.length === 0 && <tr><td colSpan={5}><Empty text="No exchange rates. Click Refresh to fetch from API." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecurringInvoices() {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1541,6 +1675,7 @@ function AppLayout() {
         {view === 'accounts' && <ChartOfAccounts />}
         {view === 'vendors' && <VendorMaster />}
         {view === 'recurring' && <RecurringInvoices />}
+        {view === 'fxrates' && <ExchangeRates />}
         {view === 'rules' && <LearnedRules />}
         {view === 'tds' && <TdsRegister />}
         {view === 'audit' && isAdmin() && <AuditLog />}

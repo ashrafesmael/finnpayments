@@ -84,6 +84,13 @@ class Invoice(Base):
     vendor_id = Column(Integer, index=True)
     vendor_match_confidence = Column(Float, default=0.0)
 
+    # Multi-currency / FX
+    exchange_rate = Column(Float, default=1.0)  # rate at booking
+    total_amount_base = Column(Float, default=0.0)  # converted to MUR
+    payment_bank_rate = Column(Float, default=0.0)  # actual bank rate at payment
+    payment_bank_charges = Column(Float, default=0.0)  # bank charges in MUR
+    payment_date = Column(String(20))  # actual payment date
+
     # Relationships
     line_items = relationship("InvoiceLineItemDB", back_populates="invoice", cascade="all, delete-orphan")
     journal_entries = relationship("JournalEntryDB", back_populates="invoice", cascade="all, delete-orphan")
@@ -248,6 +255,17 @@ class RecurringTemplate(Base):
     company_id = Column(String(50), index=True)
 
 
+class ExchangeRate(Base):
+    __tablename__ = "exchange_rates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    currency = Column(String(10), nullable=False, index=True)  # USD, EUR, GBP, ZAR, etc.
+    rate_to_mur = Column(Float, nullable=False)
+    date = Column(String(20), nullable=False, index=True)  # YYYY-MM-DD
+    source = Column(String(20), default="auto")  # auto, manual
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
@@ -270,6 +288,22 @@ def init_db():
     _migrate_business_db()
     _seed_chart_of_accounts()
     _seed_tds_rates()
+    _seed_exchange_rates()
+
+
+def get_exchange_rate(currency: str, date_str: str = None) -> float:
+    """Get the exchange rate for a currency on a given date. Returns 1.0 for MUR."""
+    if not currency or currency == "MUR":
+        return 1.0
+    db = SessionLocal()
+    try:
+        query = db.query(ExchangeRate).filter(ExchangeRate.currency == currency.upper())
+        if date_str:
+            query = query.filter(ExchangeRate.date <= date_str)
+        rate = query.order_by(ExchangeRate.date.desc()).first()
+        return rate.rate_to_mur if rate else 1.0
+    finally:
+        db.close()
 
 
 def _migrate_business_db():
@@ -324,6 +358,19 @@ def _migrate_business_db():
         ("vendor_match_confidence", "REAL DEFAULT 0.0"),
     ]
     for col, coltype in vendor_columns:
+        if not column_exists("invoices", col):
+            cursor.execute(f"ALTER TABLE invoices ADD COLUMN {col} {coltype}")
+            logger.info(f"✅ Added {col} column to invoices")
+
+    # Add FX columns to invoices
+    fx_columns = [
+        ("exchange_rate", "REAL DEFAULT 1.0"),
+        ("total_amount_base", "REAL DEFAULT 0.0"),
+        ("payment_bank_rate", "REAL DEFAULT 0.0"),
+        ("payment_bank_charges", "REAL DEFAULT 0.0"),
+        ("payment_date", "TEXT"),
+    ]
+    for col, coltype in fx_columns:
         if not column_exists("invoices", col):
             cursor.execute(f"ALTER TABLE invoices ADD COLUMN {col} {coltype}")
             logger.info(f"✅ Added {col} column to invoices")
@@ -418,6 +465,7 @@ def _seed_chart_of_accounts():
             ("7010", "Bank Charges", "expense", "7000"),
             ("7020", "Interest Expense", "expense", "7000"),
             ("7030", "Foreign Exchange Loss", "expense", "7000"),
+            ("7040", "Foreign Exchange Gain", "revenue", None),
         ]
         
         for code, name, category, parent in default_accounts:
@@ -477,6 +525,82 @@ def _seed_tds_rates():
     except Exception as e:
         db.rollback()
         logger.error(f"Error seeding TDS rates: {e}")
+    finally:
+        db.close()
+
+
+def _seed_exchange_rates():
+    """Seed default exchange rates if none exist."""
+    db = SessionLocal()
+    try:
+        if db.query(ExchangeRate).count() > 0:
+            return
+
+        from datetime import date
+        today = date.today().isoformat()
+        default_rates = [
+            ("USD", 47.5),
+            ("EUR", 52.0),
+            ("GBP", 60.0),
+            ("ZAR", 2.6),
+            ("AUD", 31.0),
+            ("CNY", 6.5),
+            ("INR", 0.57),
+        ]
+        for currency, rate in default_rates:
+            db.add(ExchangeRate(
+                currency=currency,
+                rate_to_mur=rate,
+                date=today,
+                source="seed",
+            ))
+        db.commit()
+        logger.info(f"✅ Seeded {len(default_rates)} exchange rates")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error seeding exchange rates: {e}")
+    finally:
+        db.close()
+
+
+def fetch_exchange_rates():
+    """Fetch latest exchange rates from a free FX API and update the table."""
+    import httpx
+    db = SessionLocal()
+    try:
+        response = httpx.get("https://api.exchangerate-api.com/v4/latest/MUR", timeout=15.0)
+        if response.status_code != 200:
+            logger.warning(f"FX API returned {response.status_code}")
+            return False
+        data = response.json()
+        rates = data.get("rates", {})
+        from datetime import date
+        today = date.today().isoformat()
+        updated = 0
+        for currency in ["USD", "EUR", "GBP", "ZAR", "AUD", "CNY", "INR"]:
+            if currency in rates and rates[currency] > 0:
+                rate_to_mur = round(1.0 / rates[currency], 4)
+                existing = db.query(ExchangeRate).filter(
+                    ExchangeRate.currency == currency,
+                    ExchangeRate.date == today
+                ).first()
+                if existing:
+                    existing.rate_to_mur = rate_to_mur
+                    existing.source = "auto"
+                else:
+                    db.add(ExchangeRate(
+                        currency=currency,
+                        rate_to_mur=rate_to_mur,
+                        date=today,
+                        source="auto",
+                    ))
+                updated += 1
+        db.commit()
+        logger.info(f"✅ Updated {updated} exchange rates from API")
+        return True
+    except Exception as e:
+        logger.error(f"Error fetching exchange rates: {e}")
+        return False
     finally:
         db.close()
 
