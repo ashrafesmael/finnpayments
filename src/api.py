@@ -240,7 +240,10 @@ async def invoice_action(token: str):
                       entity_type="invoice", entity_id=invoice_id,
                       description=f"Invoice {invoice.invoice_number} approved via email link",
                       company_id=invoice.company_id)
-            return _action_result_page("approved", invoice.invoice_number, invoice.vendor_name)
+            from src.auth_models import auth_db as _auth_db
+            company_info = _auth_db.get_company_by_id(invoice.company_id)
+            return _action_result_page("approved", invoice.invoice_number, invoice.vendor_name,
+                                       company_name=company_info['name'] if company_info else None)
 
         elif action == "decline":
             # Show a form with a comment box
@@ -306,12 +309,16 @@ async def invoice_action_submit(token: str = Form(...), comment: str = Form(""))
                   entity_type="invoice", entity_id=invoice_id,
                   description=f"Invoice {invoice.invoice_number} declined via email link. Reason: {comment or 'No reason provided'}",
                   company_id=invoice.company_id)
+        from src.auth_models import auth_db as _auth_db
+        company_info = _auth_db.get_company_by_id(invoice.company_id)
+        return _action_result_page("declined", invoice.invoice_number, invoice.vendor_name, comment,
+                                   company_name=company_info['name'] if company_info else None)
 
-    return _action_result_page("declined", invoice.invoice_number, invoice.vendor_name, comment)
 
-
-def _action_result_page(action: str, invoice_number: str, vendor_name: str, comment: str = None) -> HTMLResponse:
+def _action_result_page(action: str, invoice_number: str, vendor_name: str, comment: str = None,
+                        company_name: str = None) -> HTMLResponse:
     """Return a styled HTML confirmation page."""
+    company_html = f'<p style="color:#64748b;font-size:14px;margin-bottom:12px;"><strong>Company:</strong> {company_name}</p>' if company_name else ''
     if action == "approved":
         return HTMLResponse(content=f"""
         <!DOCTYPE html><html><head><title>finnpayments - Approved</title>
@@ -323,6 +330,7 @@ def _action_result_page(action: str, invoice_number: str, vendor_name: str, comm
             .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
         </style></head>
         <body><div class="container"><div class="icon">✓</div><h1>Invoice Approved</h1>
+        {company_html}
         <p>Invoice {invoice_number} from {vendor_name} has been approved successfully.</p>
         <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
         <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a></div></body></html>
@@ -339,6 +347,7 @@ def _action_result_page(action: str, invoice_number: str, vendor_name: str, comm
             .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
         </style></head>
         <body><div class="container"><div class="icon">✕</div><h1>Invoice Declined</h1>
+        {company_html}
         <p>Invoice {invoice_number} from {vendor_name} has been declined.</p>
         {comment_html}
         <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
