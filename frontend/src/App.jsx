@@ -1938,6 +1938,7 @@ function AgingReport({ onNavigate }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('payable');
+  const [ageFilter, setAgeFilter] = useState('');
 
   useEffect(() => { getAgingReport().then(setData).catch(console.error).finally(() => setLoading(false)); }, []);
 
@@ -1946,6 +1947,10 @@ function AgingReport({ onNavigate }) {
 
   const d = data[tab];
   const bucketLabels = { current: 'Current (0 days)', '1_30': '1-30 days', '31_60': '31-60 days', '61_90': '61-90 days', '90_plus': '90+ days' };
+
+  // Filter invoices by age bucket
+  const filteredInvoices = ageFilter ? d.invoices.filter(inv => inv.bucket === ageFilter) : d.invoices;
+  const filteredTotal = filteredInvoices.reduce((sum, inv) => sum + inv.amount, 0);
 
   return (
     <div className="animate-fade-in space-y">
@@ -1958,9 +1963,18 @@ function AgingReport({ onNavigate }) {
         <button className={`filter-pill ${tab === 'receivable' ? 'active' : ''}`} onClick={() => setTab('receivable')}>Accounts Receivable ({data.receivable.count})</button>
       </div>
 
+      <div className="filter-bar">
+        <button className={`filter-pill ${ageFilter === '' ? 'active' : ''}`} onClick={() => setAgeFilter('')}>All Ages</button>
+        <button className={`filter-pill ${ageFilter === 'current' ? 'active' : ''}`} onClick={() => setAgeFilter('current')}>Current (0 days)</button>
+        <button className={`filter-pill ${ageFilter === '1_30' ? 'active' : ''}`} onClick={() => setAgeFilter('1_30')}>1-30 days</button>
+        <button className={`filter-pill ${ageFilter === '31_60' ? 'active' : ''}`} onClick={() => setAgeFilter('31_60')}>31-60 days</button>
+        <button className={`filter-pill ${ageFilter === '61_90' ? 'active' : ''}`} onClick={() => setAgeFilter('61_90')}>61-90 days</button>
+        <button className={`filter-pill ${ageFilter === '90_plus' ? 'active' : ''}`} onClick={() => setAgeFilter('90_plus')}>90+ days</button>
+      </div>
+
       <div className="stats-grid">
         {Object.entries(d.buckets).map(([key, amount], i) => (
-          <div key={i} className="stat-card">
+          <div key={i} className={`stat-card ${ageFilter === key ? 'animate-fade-in' : ''}`} style={{ borderColor: ageFilter === key ? 'var(--accent)' : 'var(--border)', borderWidth: ageFilter === key ? 2 : 1 }}>
             <div className="stat-card-header"><span className="stat-card-label">{bucketLabels[key]}</span></div>
             <div className="stat-card-value" style={{ fontSize: 18 }}>{fmtCurrency(amount)}</div>
           </div>
@@ -1968,15 +1982,17 @@ function AgingReport({ onNavigate }) {
       </div>
 
       <div className="card" style={{ marginTop: 16, padding: 16 }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Total Outstanding: {fmtCurrency(d.total)}</div>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>
+          {ageFilter ? `Filtered: ${fmtCurrency(filteredTotal)} (${filteredInvoices.length} invoices)` : `Total Outstanding: ${fmtCurrency(d.total)} (${d.count} invoices)`}
+        </div>
       </div>
 
       <div className="card">
-        <div className="card-header"><h3>{tab === 'payable' ? 'Payable' : 'Receivable'} Invoices ({d.count})</h3></div>
+        <div className="card-header"><h3>{tab === 'payable' ? 'Payable' : 'Receivable'} Invoices ({filteredInvoices.length})</h3></div>
         <table className="data-table">
           <thead><tr><th>Invoice #</th><th>Vendor</th><th>Date</th><th>Due Date</th><th>Amount</th><th>Days</th><th>Bucket</th><th>Status</th></tr></thead>
           <tbody>
-            {d.invoices.map((inv, i) => (
+            {filteredInvoices.map((inv, i) => (
               <tr key={i} onClick={() => onNavigate('detail', inv.invoice_id)} style={{ cursor: 'pointer' }}>
                 <td className="mono text-xs text-accent">{inv.invoice_number}</td>
                 <td>{inv.vendor_name}</td>
@@ -1988,7 +2004,7 @@ function AgingReport({ onNavigate }) {
                 <td><StatusBadge status={inv.status} /></td>
               </tr>
             ))}
-            {d.invoices.length === 0 && <tr><td colSpan={8}><Empty text="No outstanding invoices" /></td></tr>}
+            {filteredInvoices.length === 0 && <tr><td colSpan={8}><Empty text="No invoices in this age range" /></td></tr>}
           </tbody>
         </table>
       </div>
