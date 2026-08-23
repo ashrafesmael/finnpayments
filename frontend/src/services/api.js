@@ -94,6 +94,7 @@ export const getDashboardStats = (period = 'all', startDate, endDate) => {
   const query = new URLSearchParams(params).toString();
   return apiRequest(`/dashboard/stats?${query}`);
 };
+export const getDashboardCharts = () => apiRequest('/dashboard/charts');
 
 // ─── Invoices ───────────────────────────────────────────
 export const getInvoices = (params = {}) => {

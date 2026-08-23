@@ -2860,6 +2860,79 @@ async def get_dashboard_stats(
         }
 
 
+@app.get("/dashboard/charts")
+async def get_dashboard_charts(
+    company: dict = Depends(get_current_company),
+):
+    """Get chart data for dashboard visualizations."""
+    from sqlalchemy import func, extract
+
+    with get_db() as db:
+        # 1. Monthly spend (last 6 months) — supplier invoices by month
+        six_months_ago = (datetime.now().replace(day=1)).isoformat()
+        monthly = db.query(
+            func.strftime('%Y-%m', Invoice.invoice_date).label('month'),
+            func.sum(Invoice.total_amount_base).label('total'),
+        ).filter(
+            Invoice.company_id == company['id'],
+            Invoice.invoice_type == 'supplier',
+            Invoice.status.in_(['pending_review', 'approved', 'posted', 'paid']),
+            Invoice.invoice_date >= six_months_ago,
+        ).group_by('month').order_by('month').all()
+
+        monthly_data = [
+            {"month": row.month or 'N/A', "amount": round(row.total or 0, 2)}
+            for row in monthly
+        ]
+
+        # 2. Top vendors by spend (top 5)
+        top_vendors = db.query(
+            Invoice.vendor_name,
+            func.sum(Invoice.total_amount_base).label('total'),
+        ).filter(
+            Invoice.company_id == company['id'],
+            Invoice.invoice_type == 'supplier',
+            Invoice.status.in_(['pending_review', 'approved', 'posted', 'paid']),
+        ).group_by(Invoice.vendor_name).order_by(func.sum(Invoice.total_amount_base).desc()).limit(5).all()
+
+        vendor_data = [
+            {"vendor": row.vendor_name or 'Unknown', "amount": round(row.total or 0, 2)}
+            for row in top_vendors
+        ]
+
+        # 3. Expense breakdown by account code (top 5)
+        account_totals = {}
+        entries = db.query(JournalEntryDB).filter(
+            JournalEntryDB.company_id == company['id'],
+            JournalEntryDB.status.in_(['posted']),
+        ).all()
+        for je in entries:
+            for line in je.lines:
+                if line.debit and line.debit > 0:
+                    key = (line.account_code or 'N/A', line.account_name or 'Unknown')
+                    account_totals[key] = account_totals.get(key, 0) + line.debit
+
+        sorted_accounts = sorted(account_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+        account_data = [
+            {"account_code": code, "account_name": name[:30], "amount": round(amt, 2)}
+            for (code, name), amt in sorted_accounts
+        ]
+
+        # 4. Invoice status distribution
+        status_counts = {}
+        all_invoices = db.query(Invoice).filter(Invoice.company_id == company['id']).all()
+        for inv in all_invoices:
+            status_counts[inv.status] = status_counts.get(inv.status, 0) + 1
+        status_data = [{"status": s, "count": c} for s, c in status_counts.items()]
+
+        return {
+            "monthly_spend": monthly_data,
+            "top_vendors": vendor_data,
+            "account_breakdown": account_data,
+            "status_distribution": status_data,
+        }
+
+
 # ─── Helper Functions ─────────────────────────────────────
 
 def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:

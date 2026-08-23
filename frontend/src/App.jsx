@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import {
-  getDashboardStats, getInvoices, getInvoice, uploadInvoice,
+  getDashboardStats, getDashboardCharts, getInvoices, getInvoice, uploadInvoice,
   updateInvoiceStatus, deleteInvoice, getJournalEntries,
   postJournalEntry, reverseJournalEntry, getChartOfAccounts, checkHealth,
   exportJournalEntriesExcel,
@@ -154,6 +154,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
    ═══════════════════════════════════════════════════════ */
 function Dashboard({ onNavigate }) {
   const [stats, setStats] = useState(null);
+  const [charts, setCharts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('all');
   const [customStart, setCustomStart] = useState('');
@@ -167,6 +168,8 @@ function Dashboard({ onNavigate }) {
       const ed = period === 'custom' ? customEnd : undefined;
       const r = await getDashboardStats(period, sd, ed);
       setStats(r);
+      const c = await getDashboardCharts();
+      setCharts(c);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, [period, customStart, customEnd]);
@@ -248,6 +251,110 @@ function Dashboard({ onNavigate }) {
           </tbody>
         </table>
       </div>
+
+      {/* Charts */}
+      {charts && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 16 }}>
+          {/* Monthly Spend */}
+          {charts.monthly_spend?.length > 0 && (
+            <div className="card">
+              <div className="card-header"><h3>Monthly Spend</h3></div>
+              <div style={{ padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', height: 200, gap: 8, padding: '0 8px' }}>
+                  {charts.monthly_spend.map((m, i) => {
+                    const maxAmt = Math.max(...charts.monthly_spend.map(x => x.amount), 1);
+                    const h = (m.amount / maxAmt) * 160;
+                    return (
+                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{m.amount > 1000 ? `${(m.amount/1000).toFixed(0)}K` : m.amount.toFixed(0)}</div>
+                        <div style={{ width: '100%', maxWidth: 50, height: h, background: 'var(--accent)', borderRadius: '4px 4px 0 0', minHeight: 4, opacity: 0.3 + (i / charts.monthly_spend.length) * 0.7 }} />
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{m.month?.slice(5) || '?'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Top Vendors */}
+          {charts.top_vendors?.length > 0 && (
+            <div className="card">
+              <div className="card-header"><h3>Top Vendors by Spend</h3></div>
+              <div style={{ padding: 16 }}>
+                {charts.top_vendors.map((v, i) => {
+                  const maxAmt = Math.max(...charts.top_vendors.map(x => x.amount), 1);
+                  const w = (v.amount / maxAmt) * 100;
+                  return (
+                    <div key={i} style={{ marginBottom: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>{v.vendor}</span>
+                        <span className="mono text-muted">{fmtCurrency(v.amount)}</span>
+                      </div>
+                      <div style={{ height: 8, background: 'var(--bg-surface-hover)', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ width: `${w}%`, height: '100%', background: 'var(--accent)', borderRadius: 4, opacity: 0.4 + (i === 0 ? 0.6 : 0.3) }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Account Breakdown */}
+          {charts.account_breakdown?.length > 0 && (
+            <div className="card">
+              <div className="card-header"><h3>Expense by Account (Top 5)</h3></div>
+              <div style={{ padding: 16 }}>
+                {charts.account_breakdown.map((a, i) => {
+                  const maxAmt = Math.max(...charts.account_breakdown.map(x => x.amount), 1);
+                  const w = (a.amount / maxAmt) * 100;
+                  const colors = ['var(--accent)', 'var(--blue)', 'var(--amber)', 'var(--purple)', 'var(--red)'];
+                  return (
+                    <div key={i} style={{ marginBottom: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 500 }}><span className="mono text-xs" style={{ color: 'var(--accent)' }}>{a.account_code}</span> {a.account_name}</span>
+                        <span className="mono text-muted">{fmtCurrency(a.amount)}</span>
+                      </div>
+                      <div style={{ height: 8, background: 'var(--bg-surface-hover)', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ width: `${w}%`, height: '100%', background: colors[i], borderRadius: 4 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Status Distribution */}
+          {charts.status_distribution?.length > 0 && (
+            <div className="card">
+              <div className="card-header"><h3>Invoice Status</h3></div>
+              <div style={{ padding: 16, display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {charts.status_distribution.map((s, i) => {
+                  const total = charts.status_distribution.reduce((sum, x) => sum + x.count, 0);
+                  const pct = total > 0 ? (s.count / total) * 100 : 0;
+                  const colors = { pending_review: 'var(--amber)', approved: 'var(--blue)', posted: 'var(--accent)', paid: 'var(--green)', rejected: 'var(--red)' };
+                  return (
+                    <div key={i} style={{ textAlign: 'center', minWidth: 80 }}>
+                      <div style={{
+                        width: 80, height: 80, borderRadius: '50%', margin: '0 auto 8px',
+                        background: `conic-gradient(${colors[s.status] || 'var(--text-muted)'} ${pct * 3.6}deg, var(--bg-surface-hover) 0deg)`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--bg-surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700 }}>
+                          {s.count}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'capitalize' }}>{s.status.replace('_', ' ')}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
