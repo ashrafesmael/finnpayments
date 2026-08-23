@@ -444,6 +444,7 @@ async def upload_invoice(
                     assignee['email'], assignee['full_name'], inv_num, vendor, total, cur, login_url,
                     attachment_path=str(file_path),
                     approve_url=approve_url, decline_url=decline_url,
+                    company_name=company['name'],
                 )
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")
@@ -744,7 +745,8 @@ async def update_invoice_status(
                 return  # Don't notify the action performer
             send_func(notifee['email'], notifee['full_name'],
                       invoice.invoice_number, invoice.vendor_name,
-                      invoice.total_amount, invoice.currency, login_url)
+                      invoice.total_amount, invoice.currency, login_url,
+                      company_name=company['name'])
 
         if status == "approved":
             # Notify the assigned user that the invoice is ready for posting
@@ -752,8 +754,8 @@ async def update_invoice_status(
 
         elif status == "rejected":
             # Notify the user who uploaded it (if different from rejector)
-            notify_user(invoice.assigned_to, lambda e, n, inv, ven, amt, cur, url=None:
-                email_service.send_invoice_rejected(e, n, inv, ven, amt, cur))
+            notify_user(invoice.assigned_to, lambda e, n, inv, ven, amt, cur, url=None, **kw:
+                email_service.send_invoice_rejected(e, n, inv, ven, amt, cur, company_name=kw.get('company_name')))
 
         elif status == "posted":
             # Notify the assigned user that the invoice is posted and ready for payment

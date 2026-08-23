@@ -333,10 +333,14 @@ class EmailService:
         return self._send_email(to_email, subject, html_content)
 
     def send_invoice_approved(self, to_email: str, full_name: str, invoice_number: str,
-                              vendor_name: str, amount: float, currency: str, login_url: str = "") -> bool:
+                              vendor_name: str, amount: float, currency: str, login_url: str = "",
+                              company_name: str = None) -> bool:
         """Notify that an invoice is approved and needs posting (maker/checker context)."""
-        subject = "finnpayments - Invoice Approved, Ready for Posting"
+        subject = f"finnpayments - Invoice Approved: {invoice_number}"
+        if company_name:
+            subject += f" ({company_name})"
         reset_link = f'<p><a href="{login_url}" class="btn">View & Post Invoice</a></p>' if login_url else ''
+        company_line = f'<p style="color:#64748b;font-size:13px;"><strong>Company:</strong> {company_name}</p>' if company_name else ''
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -359,6 +363,7 @@ class EmailService:
                 </div>
                 <div class="content">
                     <h2>Dear {full_name},</h2>
+                    {company_line}
                     <div class="status">
                         <strong>Invoice Approved &mdash; Ready for Posting</strong>
                         <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been approved and is now ready to be posted to the General Ledger.</p>
@@ -377,10 +382,14 @@ class EmailService:
         return self._send_email(to_email, subject, html_content)
 
     def send_invoice_rejected(self, to_email: str, full_name: str, invoice_number: str,
-                               vendor_name: str, amount: float, currency: str, reason: str = "") -> bool:
+                               vendor_name: str, amount: float, currency: str, reason: str = "",
+                               company_name: str = None) -> bool:
         """Notify that an invoice was rejected."""
         reason_text = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
-        subject = "finnpayments - Invoice Rejected"
+        subject = f"finnpayments - Invoice Rejected: {invoice_number}"
+        if company_name:
+            subject += f" ({company_name})"
+        company_line = f'<p style="color:#64748b;font-size:13px;"><strong>Company:</strong> {company_name}</p>' if company_name else ''
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -402,6 +411,7 @@ class EmailService:
                 </div>
                 <div class="content">
                     <h2>Dear {full_name},</h2>
+                    {company_line}
                     <div class="status">
                         <strong>Invoice Rejected</strong>
                         <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been rejected.</p>
@@ -420,10 +430,14 @@ class EmailService:
         return self._send_email(to_email, subject, html_content)
 
     def send_invoice_posted(self, to_email: str, full_name: str, invoice_number: str,
-                            vendor_name: str, amount: float, currency: str, login_url: str = "") -> bool:
+                            vendor_name: str, amount: float, currency: str, login_url: str = "",
+                            company_name: str = None) -> bool:
         """Notify that an invoice has been posted to the GL and is ready for payment."""
         reset_link = f'<p><a href="{login_url}" class="btn">View Invoice</a></p>' if login_url else ''
-        subject = "finnpayments - Invoice Posted to GL, Ready for Payment"
+        subject = f"finnpayments - Invoice Posted: {invoice_number}"
+        if company_name:
+            subject += f" ({company_name})"
+        company_line = f'<p style="color:#64748b;font-size:13px;"><strong>Company:</strong> {company_name}</p>' if company_name else ''
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -446,6 +460,7 @@ class EmailService:
                 </div>
                 <div class="content">
                     <h2>Dear {full_name},</h2>
+                    {company_line}
                     <div class="status">
                         <strong>Invoice Posted &mdash; Ready for Payment</strong>
                         <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been posted to the General Ledger and is now ready for payment.</p>
@@ -464,10 +479,14 @@ class EmailService:
 
     def send_new_invoice_uploaded(self, to_email: str, full_name: str, invoice_number: str,
                                    vendor_name: str, amount: float, currency: str, login_url: str = "",
-                                   attachment_path: str = None, approve_url: str = None, decline_url: str = None) -> bool:
+                                   attachment_path: str = None, approve_url: str = None, decline_url: str = None,
+                                   company_name: str = None) -> bool:
         """Notify approvers that a new invoice has been uploaded and needs review.
         Optionally attaches the invoice PDF and includes approve/decline buttons."""
         subject = f"finnpayments - New Invoice Needs Review: {invoice_number}"
+        if company_name:
+            subject += f" ({company_name})"
+        company_line = f'<p style="color:#64748b;font-size:13px;"><strong>Company:</strong> {company_name}</p>' if company_name else ''
 
         # Build action buttons if URLs are provided
         action_buttons = ""
@@ -503,6 +522,7 @@ class EmailService:
                 </div>
                 <div class="content">
                     <h2>Dear {full_name},</h2>
+                    {company_line}
                     <div class="status">
                         <strong>New Invoice Uploaded &mdash; Pending Review</strong>
                         <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been uploaded and needs your review.</p>
