@@ -70,7 +70,7 @@ const Empty = ({ text }) => <div className="empty-state">{text || 'No data found
 /* ═══════════════════════════════════════════════════════
    SIDEBAR
    ═══════════════════════════════════════════════════════ */
-function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting, user, onLogout, isAdmin, companies, selectedCompany, onSelectCompany }) {
+function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, resetting, user, onLogout, isAdmin, companies, selectedCompany, onSelectCompany, mobileOpen, onCloseMobile }) {
   const items = [
     { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
     { id: 'upload', label: 'Upload Invoice', icon: Icons.Upload },
@@ -87,7 +87,9 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
   ];
 
   return (
-    <aside className="sidebar">
+    <>
+    {mobileOpen && <div className="sidebar-overlay show" onClick={onCloseMobile} />}
+    <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
       <div className="sidebar-logo">
         <div className="sidebar-logo-icon">fp</div>
         <div className="sidebar-logo-text">
@@ -146,6 +148,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
         </div>
       )}
     </aside>
+    </>
   );
 }
 
@@ -1842,6 +1845,7 @@ function AppLayout() {
   const [theme, setTheme] = useState(() => localStorage.getItem('fp-theme') || 'dark');
   const [resetting, setResetting] = useState(false);
   const [companyKey, setCompanyKey] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -1862,7 +1866,7 @@ function AppLayout() {
     setCompanyKey(k => k + 1);
   };
 
-  const nav = (v, id = null) => { setView(v); setSelectedId(id); window.scrollTo(0, 0); };
+  const nav = (v, id = null) => { setView(v); setSelectedId(id); window.scrollTo(0, 0); setMobileMenuOpen(false); };
 
   const handleReset = async () => {
     if (!window.confirm(`This will permanently delete ALL invoices and journal entries for ${selectedCompany?.name || 'the active company'}.\n\nChart of accounts and learned classification rules are kept.\n\nAre you sure?`)) return;
@@ -1896,6 +1900,7 @@ function AppLayout() {
 
   return (
     <div className="app-layout" key={companyKey}>
+      <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>☰</button>
       <Sidebar
         active={view}
         onNavigate={nav}
@@ -1909,7 +1914,9 @@ function AppLayout() {
         isAdmin={isAdmin()}
         companies={user?.companies || []}
         selectedCompany={selectedCompany}
-        onSelectCompany={handleSelectCompany}
+        onSelectCompany={(c) => { handleSelectCompany(c); setMobileMenuOpen(false); }}
+        mobileOpen={mobileMenuOpen}
+        onCloseMobile={() => setMobileMenuOpen(false)}
       />
       <main className="main-content">
         {view === 'dashboard' && <Dashboard onNavigate={nav} />}
