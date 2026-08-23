@@ -1067,6 +1067,22 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
           )
         )}
       </div>
+
+      {/* Decline reason */}
+      {inv.status === 'rejected' && inv.notes && (
+        <div className="card" style={{ padding: 16, borderColor: 'var(--red)', borderWidth: 1, borderStyle: 'solid', background: 'var(--red-muted)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 18 }}>✕</span>
+            <strong style={{ color: 'var(--red)', fontSize: 14 }}>Invoice Declined</strong>
+          </div>
+          {inv.notes.split('\n').filter(l => l.includes('[Declined')).map((line, i) => (
+            <p key={i} style={{ fontSize: 13, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+              {line.replace(/\[Declined via email: /, '').replace(/\]$/, '')}
+            </p>
+          ))}
+        </div>
+      )}
+
       {showPaymentForm && inv.currency && inv.currency.toUpperCase() !== 'MUR' && (
         <PaymentSettlementForm
           inv={inv}

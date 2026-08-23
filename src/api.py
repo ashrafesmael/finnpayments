@@ -3162,6 +3162,7 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "created_at": invoice.created_at.isoformat() if invoice.created_at else None,
         "updated_at": invoice.updated_at.isoformat() if invoice.updated_at else None,
         "has_document": bool(invoice.source_file and Path(invoice.source_file).exists()),
+        "notes": invoice.notes,
     }
 
 
