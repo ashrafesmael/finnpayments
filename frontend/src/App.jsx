@@ -1011,7 +1011,7 @@ function PaymentSettlementForm({ inv, onSettle, onCancel }) {
   );
 }
 
-function VendorLinkDropdown({ invoiceId, onLinked }) {
+function VendorLinkDropdown({ invoiceId, onLinked, disabled }) {
   const [vendors, setVendors] = useState([]);
   const [show, setShow] = useState(false);
 
@@ -1022,7 +1022,8 @@ function VendorLinkDropdown({ invoiceId, onLinked }) {
     catch (e) { alert(e.message); }
   };
 
-  if (!show) {
+  if (!show || disabled) {
+    if (disabled) return <span className="text-muted text-xs">Link disabled</span>;
     return <button className="btn btn-sm" onClick={() => setShow(true)}>Link Vendor</button>;
   }
 
@@ -1146,12 +1147,12 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
                   <span className="badge badge-posted" style={{ fontSize: 11 }}>
                     Linked {inv.vendor_match_confidence < 1.0 ? `(${(inv.vendor_match_confidence * 100).toFixed(0)}% auto)` : '(manual)'}
                   </span>
-                  <button className="btn btn-sm" onClick={() => { unlinkInvoiceVendor(invoiceId).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message)); }}>Unlink</button>
+                  {inv.status === 'pending_review' && <button className="btn btn-sm" onClick={() => { unlinkInvoiceVendor(invoiceId).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message)); }}>Unlink</button>}
                 </>
               ) : (
                 <>
                   <span className="text-muted text-xs">Not linked</span>
-                  <VendorLinkDropdown invoiceId={invoiceId} onLinked={() => getInvoice(invoiceId).then(setInv)} />
+                  <VendorLinkDropdown invoiceId={invoiceId} onLinked={() => getInvoice(invoiceId).then(setInv)} disabled={inv.status !== 'pending_review'} />
                 </>
               )}
             </span>
