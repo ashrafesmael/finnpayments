@@ -1989,6 +1989,28 @@ async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict 
         log_audit("invoice_assigned", user, entity_type="invoice", entity_id=invoice_id,
                   description=f"Invoice {invoice.invoice_number} assigned to {assignee['email'] if assignee else request.assigned_to}", company_id=company['id'])
 
+        # Send notification email to the new assignee
+        if assignee and assignee['status'] == 'approved' and assignee['id'] != user['id']:
+            try:
+                login_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
+                base_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
+                approve_token = generate_action_token(invoice.invoice_id, assignee['id'], "approve")
+                decline_token = generate_action_token(invoice.invoice_id, assignee['id'], "decline")
+                approve_url = f"{base_url}/api/invoice-action?token={approve_token}"
+                decline_url = f"{base_url}/api/invoice-action?token={decline_token}"
+                doc_path = invoice.source_file if invoice.source_file and os.path.exists(invoice.source_file) else None
+                email_service.send_new_invoice_uploaded(
+                    assignee['email'], assignee['full_name'],
+                    invoice.invoice_number, invoice.vendor_name,
+                    invoice.total_amount or 0, invoice.currency,
+                    login_url, attachment_path=doc_path,
+                    approve_url=approve_url, decline_url=decline_url,
+                    company_name=company['name'],
+                )
+                logger.info(f"📧 Assignment notification sent to {assignee['email']}")
+            except Exception as e:
+                logger.error(f"Failed to send assignment notification: {e}")
+
         # E-signature integration (DocuSeal/OpenSign) is currently disabled
         # To re-enable, set DOCUSEAL_API_KEY in .env and uncomment the block below
         # if docuseal_configured() and assignee and invoice.status == "pending_review":
