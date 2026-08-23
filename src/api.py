@@ -327,12 +327,14 @@ async def list_invoices(
     limit: int = Query(50, le=200),
     offset: int = 0,
     search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     company: dict = Depends(get_current_company),
 ):
-    """List all invoices with optional filtering"""
+    """List all invoices with optional filtering (status, type, search, date range)"""
     with get_db() as db:
         query = db.query(Invoice).filter(Invoice.company_id == company['id']).order_by(Invoice.created_at.desc())
-        
+
         if status:
             query = query.filter(Invoice.status == status)
         if invoice_type:
@@ -342,7 +344,11 @@ async def list_invoices(
                 (Invoice.vendor_name.ilike(f"%{search}%")) |
                 (Invoice.invoice_number.ilike(f"%{search}%"))
             )
-        
+        if start_date:
+            query = query.filter(Invoice.invoice_date >= start_date)
+        if end_date:
+            query = query.filter(Invoice.invoice_date <= end_date)
+
         total = query.count()
         invoices = query.offset(offset).limit(limit).all()
         

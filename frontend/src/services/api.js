@@ -101,6 +101,12 @@ export const getInvoices = (params = {}) => {
   return apiRequest(`/invoices${query ? '?' + query : ''}`);
 };
 
+export const getInvoicesByDateRange = (startDate, endDate, otherParams = {}) => {
+  const params = { start_date: startDate, end_date: endDate, ...otherParams };
+  const query = new URLSearchParams(params).toString();
+  return apiRequest(`/invoices${query ? '?' + query : ''}`);
+};
+
 export const getInvoice = (invoiceId) => apiRequest(`/invoices/${invoiceId}`);
 
 export const uploadInvoice = async (file, invoiceType = 'supplier', projectCode = '', costCenter = '', assignedTo = '') => {

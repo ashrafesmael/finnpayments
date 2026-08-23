@@ -512,13 +512,23 @@ function InvoiceList({ onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const r = await getInvoices({ ...(filter && { status: filter }), ...(search && { search }) }); setInvoices(r.invoices || []); setTotal(r.total || 0); }
+    try {
+      const params = {};
+      if (filter) params.status = filter;
+      if (search) params.search = search;
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      const r = await getInvoices(params);
+      setInvoices(r.invoices || []); setTotal(r.total || 0);
+    }
     catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [filter, search]);
+  }, [filter, search, startDate, endDate]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -531,6 +541,10 @@ function InvoiceList({ onNavigate }) {
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <input className="input" style={{ width: 260 }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search vendor or invoice #..." />
+        <input type="date" className="input" style={{ width: 150 }} value={startDate} onChange={(e) => setStartDate(e.target.value)} title="From date" />
+        <span className="text-muted text-xs">to</span>
+        <input type="date" className="input" style={{ width: 150 }} value={endDate} onChange={(e) => setEndDate(e.target.value)} title="To date" />
+        {(startDate || endDate) && <button className="btn btn-sm" onClick={() => { setStartDate(''); setEndDate(''); }}>Clear dates</button>}
         <div className="filter-bar">
           {['', 'pending_review', 'approved', 'posted', 'paid', 'rejected'].map(s => (
             <button key={s} className={`filter-pill ${filter === s ? 'active' : ''}`} onClick={() => setFilter(s)}>
