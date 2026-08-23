@@ -3338,6 +3338,9 @@ def _check_duplicate(result: Dict, company_id: str) -> Optional[dict]:
             Invoice.vendor_name == vendor,
         ).first()
         if dup:
+            from src.auth_models import auth_db as _auth_db
+            company_info = _auth_db.get_company_by_id(company_id)
+            company_name = company_info['name'] if company_info else 'this company'
             warning = {
                 'existing_invoice_id': dup.invoice_id,
                 'invoice_number': dup.invoice_number,
@@ -3345,9 +3348,9 @@ def _check_duplicate(result: Dict, company_id: str) -> Optional[dict]:
                 'amount': dup.total_amount,
                 'status': dup.status,
                 'invoice_date': dup.invoice_date,
-                'message': f'A similar invoice already exists: {dup.invoice_number} from {dup.vendor_name} (status: {dup.status}, amount: {dup.total_amount})',
+                'message': f'A similar invoice already exists in {company_name}: {dup.invoice_number} from {dup.vendor_name} (status: {dup.status}, amount: {dup.total_amount})',
             }
-            logger.warning(f"⚠️ Possible duplicate: {inv_number} from {vendor} already exists as {dup.invoice_id}")
+            logger.warning(f"⚠️ Possible duplicate in {company_name}: {inv_number} from {vendor} already exists as {dup.invoice_id}")
             return warning
     return None
 
