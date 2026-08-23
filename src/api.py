@@ -231,24 +231,23 @@ async def upload_invoice(
     processing_time = time.time() - start_time
     result["processing_time"] = round(processing_time, 2)
 
-    # Notify company users about the new invoice
+    # Notify the assigned user about the new invoice (only the assignee, not all company users)
     try:
         from src.auth_models import auth_db as _auth_db
         login_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
-        company_users = _auth_db.get_users_for_company(company['id'])
         extracted = result.get("extracted_data", {})
         inv_num = extracted.get("invoice_number", result["invoice_id"])
         vendor = extracted.get("vendor_name", "Unknown")
         total = extracted.get("total_amount", 0)
         cur = extracted.get("currency", "MUR")
-        for cu in company_users:
-            if cu['id'] == user['id']:
-                continue
-            if cu['status'] != 'approved':
-                continue
-            email_service.send_new_invoice_uploaded(
-                cu['email'], cu['full_name'], inv_num, vendor, total, cur, login_url
-            )
+        # Only notify the assigned user (not the uploader)
+        assigned_user_id = assigned_to or user['id']
+        if assigned_user_id != user['id']:
+            assignee = _auth_db.get_user_by_id(assigned_user_id)
+            if assignee and assignee['status'] == 'approved':
+                email_service.send_new_invoice_uploaded(
+                    assignee['email'], assignee['full_name'], inv_num, vendor, total, cur, login_url
+                )
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")
 
