@@ -330,7 +330,7 @@ def _action_result_page(action: str, invoice_number: str, vendor_name: str, comm
             .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; border: none; cursor: pointer; font-size: 15px; }}
             .btn-secondary {{ background: #1c2d4a; margin-left: 8px; }}
         </style>
-        <script>setTimeout(function(){{ try{{ window.close(); }}catch(e){{}} }}, 3000);</script>
+        <script>setTimeout(function(){{ try{{ window.close(); }}catch(e){{}} }}, 10000);</script>
         </head>
         <body><div class="container"><div class="icon">✓</div><h1>Invoice Approved</h1>
         {company_html}
@@ -352,7 +352,7 @@ def _action_result_page(action: str, invoice_number: str, vendor_name: str, comm
             .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; border: none; cursor: pointer; font-size: 15px; }}
             .btn-secondary {{ background: #1c2d4a; margin-left: 8px; }}
         </style>
-        <script>setTimeout(function(){{ try{{ window.close(); }}catch(e){{}} }}, 3000);</script>
+        <script>setTimeout(function(){{ try{{ window.close(); }}catch(e){{}} }}, 10000);</script>
         </head>
         <body><div class="container"><div class="icon">✕</div><h1>Invoice Declined</h1>
         {company_html}
