@@ -327,13 +327,18 @@ def _action_result_page(action: str, invoice_number: str, vendor_name: str, comm
             .container {{ text-align: center; max-width: 500px; padding: 40px; }}
             h1 {{ color: #10b981; margin-bottom: 16px; }}
             .icon {{ font-size: 48px; margin-bottom: 20px; }}
-            .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
-        </style></head>
+            .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; border: none; cursor: pointer; font-size: 15px; }}
+            .btn-secondary {{ background: #1c2d4a; margin-left: 8px; }}
+        </style>
+        <script>setTimeout(function(){{ try{{ window.close(); }}catch(e){{}} }}, 3000);</script>
+        </head>
         <body><div class="container"><div class="icon">✓</div><h1>Invoice Approved</h1>
         {company_html}
         <p>Invoice {invoice_number} from {vendor_name} has been approved successfully.</p>
-        <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
-        <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a></div></body></html>
+        <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link. This window will close shortly.</p>
+        <button class="btn" onclick="try{{window.close()}}catch(e){{window.location.href='https://payments.finnverify.com'}}">Close</button>
+        <a href="https://payments.finnverify.com" class="btn btn-secondary" style="text-decoration:none; display:inline-block;">Go to finnpayments</a>
+        </div></body></html>
         """)
     else:
         comment_html = f'<div style="background:#1c2d4a;padding:12px;border-radius:8px;margin:16px 0;font-size:14px;text-align:left;"><strong>Reason:</strong> {comment}</div>' if comment else ''
@@ -344,14 +349,19 @@ def _action_result_page(action: str, invoice_number: str, vendor_name: str, comm
             .container {{ text-align: center; max-width: 500px; padding: 40px; }}
             h1 {{ color: #ef4444; margin-bottom: 16px; }}
             .icon {{ font-size: 48px; margin-bottom: 20px; }}
-            .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
-        </style></head>
+            .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; border: none; cursor: pointer; font-size: 15px; }}
+            .btn-secondary {{ background: #1c2d4a; margin-left: 8px; }}
+        </style>
+        <script>setTimeout(function(){{ try{{ window.close(); }}catch(e){{}} }}, 3000);</script>
+        </head>
         <body><div class="container"><div class="icon">✕</div><h1>Invoice Declined</h1>
         {company_html}
         <p>Invoice {invoice_number} from {vendor_name} has been declined.</p>
         {comment_html}
-        <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
-        <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a></div></body></html>
+        <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link. This window will close shortly.</p>
+        <button class="btn" onclick="try{{window.close()}}catch(e){{window.location.href='https://payments.finnverify.com'}}">Close</button>
+        <a href="https://payments.finnverify.com" class="btn btn-secondary" style="text-decoration:none; display:inline-block;">Go to finnpayments</a>
+        </div></body></html>
         """)
 
 
