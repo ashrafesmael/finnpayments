@@ -252,28 +252,29 @@ async def upload_invoice(
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")
 
-    # If assigned to someone other than uploader and DocuSeal is configured, create e-signature envelope
-    if assigned_to and assigned_to != user['id'] and docuseal_configured():
-        try:
-            from src.auth_models import auth_db as _auth_db
-            assignee = _auth_db.get_user_by_id(assigned_to)
-            if assignee and assignee['status'] == 'approved':
-                doc_path = str(file_path) if file_path and os.path.exists(str(file_path)) else None
-                envelope = await create_approval_envelope(
-                    invoice_id=result["invoice_id"],
-                    invoice_number=extracted.get("invoice_number", result["invoice_id"]),
-                    vendor_name=extracted.get("vendor_name", "Unknown"),
-                    amount=extracted.get("total_amount", 0),
-                    currency=extracted.get("currency", "MUR"),
-                    approver_email=assignee['email'],
-                    approver_name=assignee['full_name'],
-                    document_path=doc_path,
-                )
-                if envelope:
-                    log_audit("docuseal_envelope_created", user, entity_type="invoice", entity_id=result["invoice_id"],
-                              description=f"DocuSeal envelope created for {extracted.get('invoice_number', result['invoice_id'])} (submission_id={envelope.get('id')})", company_id=company['id'])
-        except Exception as e:
-            logger.error(f"Failed to create DocuSeal envelope on upload: {e}")
+    # E-signature integration (DocuSeal/OpenSign) is currently disabled
+    # To re-enable, set DOCUSEAL_API_KEY in .env and uncomment the block below
+    # if assigned_to and assigned_to != user['id'] and docuseal_configured():
+    #     try:
+    #         from src.auth_models import auth_db as _auth_db
+    #         assignee = _auth_db.get_user_by_id(assigned_to)
+    #         if assignee and assignee['status'] == 'approved':
+    #             doc_path = str(file_path) if file_path and os.path.exists(str(file_path)) else None
+    #             envelope = await create_approval_envelope(
+    #                 invoice_id=result["invoice_id"],
+    #                 invoice_number=extracted.get("invoice_number", result["invoice_id"]),
+    #                 vendor_name=extracted.get("vendor_name", "Unknown"),
+    #                 amount=extracted.get("total_amount", 0),
+    #                 currency=extracted.get("currency", "MUR"),
+    #                 approver_email=assignee['email'],
+    #                 approver_name=assignee['full_name'],
+    #                 document_path=doc_path,
+    #             )
+    #             if envelope:
+    #                 log_audit("docuseal_envelope_created", user, entity_type="invoice", entity_id=result["invoice_id"],
+    #                           description=f"DocuSeal envelope created for {extracted.get('invoice_number', result['invoice_id'])} (submission_id={envelope.get('id')})", company_id=company['id'])
+    #     except Exception as e:
+    #         logger.error(f"Failed to create DocuSeal envelope on upload: {e}")
 
     return result
 
@@ -1679,24 +1680,23 @@ async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict 
         log_audit("invoice_assigned", user, entity_type="invoice", entity_id=invoice_id,
                   description=f"Invoice {invoice.invoice_number} assigned to {assignee['email'] if assignee else request.assigned_to}", company_id=company['id'])
 
-        # If DocuSeal is configured, create an e-signature envelope for the approver
-        if docuseal_configured() and assignee and invoice.status == "pending_review":
-            doc_path = invoice.source_file if invoice.source_file and os.path.exists(invoice.source_file) else None
-            envelope = await create_approval_envelope(
-                invoice_id=invoice.invoice_id,
-                invoice_number=invoice.invoice_number,
-                vendor_name=invoice.vendor_name,
-                amount=invoice.total_amount,
-                currency=invoice.currency,
-                approver_email=assignee['email'],
-                approver_name=assignee['full_name'],
-                document_path=doc_path,
-            )
-            if envelope:
-                # Store the DocuSeal submission ID on the invoice (as metadata in source_file field's sibling)
-                # We'll use a simple approach: store in the audit log
-                log_audit("docuseal_envelope_created", user, entity_type="invoice", entity_id=invoice_id,
-                          description=f"DocuSeal envelope created for {invoice.invoice_number} (submission_id={envelope.get('id')})", company_id=company['id'])
+        # E-signature integration (DocuSeal/OpenSign) is currently disabled
+        # To re-enable, set DOCUSEAL_API_KEY in .env and uncomment the block below
+        # if docuseal_configured() and assignee and invoice.status == "pending_review":
+        #     doc_path = invoice.source_file if invoice.source_file and os.path.exists(invoice.source_file) else None
+        #     envelope = await create_approval_envelope(
+        #         invoice_id=invoice.invoice_id,
+        #         invoice_number=invoice.invoice_number,
+        #         vendor_name=invoice.vendor_name,
+        #         amount=invoice.total_amount,
+        #         currency=invoice.currency,
+        #         approver_email=assignee['email'],
+        #         approver_name=assignee['full_name'],
+        #         document_path=doc_path,
+        #     )
+        #     if envelope:
+        #         log_audit("docuseal_envelope_created", user, entity_type="invoice", entity_id=invoice_id,
+        #                   description=f"DocuSeal envelope created for {invoice.invoice_number} (submission_id={envelope.get('id')})", company_id=company['id'])
 
         return {"message": f"Invoice assigned to {assignee['full_name'] if assignee else 'user'}", "assigned_to": request.assigned_to}
 
