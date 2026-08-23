@@ -1182,9 +1182,18 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
           {/* Approver/Poster info */}
           {inv.approved_by && (
             <div className="detail-row">
-              <span className="detail-label">Approved By</span>
+              <span className="detail-label">{inv.status === 'rejected' ? 'Declined By' : 'Approved By'}</span>
               <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ color: 'var(--accent)' }}>✓ {inv.approved_by}</span>
+                <span style={{ color: inv.status === 'rejected' ? 'var(--red)' : 'var(--accent)' }}>
+                  {inv.status === 'rejected' ? '✕' : '✓'} {inv.approved_by}
+                </span>
+                {inv.updated_at && (
+                  <span className="text-muted text-xs">
+                    {new Date(inv.updated_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    {' at '}
+                    {new Date(inv.updated_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
               </span>
             </div>
           )}
@@ -1193,6 +1202,11 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
               <span className="detail-label">Posted By</span>
               <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ color: 'var(--blue)' }}>↗ {inv.posted_by}</span>
+                {inv.updated_at && (
+                  <span className="text-muted text-xs">
+                    {new Date(inv.updated_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                )}
               </span>
             </div>
           )}
