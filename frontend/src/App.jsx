@@ -935,7 +935,7 @@ function TdsOverride({ invoice, onUpdate }) {
   );
 }
 
-function AssigneeDropdown({ currentAssignee, onAssign }) {
+function AssigneeDropdown({ currentAssignee, onAssign, disabled }) {
   const [users, setUsers] = useState([]);
   const [show, setShow] = useState(false);
   const { user } = useAuth();
@@ -951,11 +951,11 @@ function AssigneeDropdown({ currentAssignee, onAssign }) {
 
   const assignee = users.find(u => u.id === currentAssignee);
 
-  if (!show) {
+  if (!show || disabled) {
     return (
       <>
         <span className="text-sm">{assignee ? assignee.full_name : currentAssignee === user?.id ? 'You' : 'Unassigned'}</span>
-        <button className="btn btn-sm" onClick={() => setShow(true)}>Reassign</button>
+        {!disabled && <button className="btn btn-sm" onClick={() => setShow(true)}>Reassign</button>}
       </>
     );
   }
@@ -1163,6 +1163,7 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
               <AssigneeDropdown
                 currentAssignee={inv.assigned_to_id}
                 onAssign={(userId) => assignInvoice(invoiceId, userId).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message))}
+                disabled={inv.status !== 'pending_review'}
               />
             </span>
           </div>
