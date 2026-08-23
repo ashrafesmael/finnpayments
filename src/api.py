@@ -246,7 +246,8 @@ async def upload_invoice(
             assignee = _auth_db.get_user_by_id(assigned_user_id)
             if assignee and assignee['status'] == 'approved':
                 email_service.send_new_invoice_uploaded(
-                    assignee['email'], assignee['full_name'], inv_num, vendor, total, cur, login_url
+                    assignee['email'], assignee['full_name'], inv_num, vendor, total, cur, login_url,
+                    attachment_path=str(file_path)
                 )
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")

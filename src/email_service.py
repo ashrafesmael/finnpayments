@@ -4,6 +4,7 @@ Email Service for finnpayments Authentication
 import smtplib
 import os
 import time
+import base64
 import logging
 import httpx
 from email.mime.text import MIMEText
@@ -62,8 +63,9 @@ class EmailService:
         return self._graph_tok
 
     def _graph_send(self, to_email: str, subject: str, html_content: str,
-                    from_name: str = None) -> bool:
-        """Send via Microsoft Graph /sendMail as self.graph_sender."""
+                    from_name: str = None, attachment_bytes: bytes = None,
+                    attachment_name: str = None, attachment_mime: str = "application/pdf") -> bool:
+        """Send via Microsoft Graph /sendMail as self.graph_sender. Optional attachment."""
         try:
             token = self._graph_token()
             message = {
@@ -73,6 +75,13 @@ class EmailService:
             }
             if from_name:
                 message["from"] = {"emailAddress": {"name": from_name, "address": self.graph_sender}}
+            if attachment_bytes and attachment_name:
+                message["attachments"] = [{
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": attachment_name,
+                    "contentType": attachment_mime,
+                    "contentBytes": base64.b64encode(attachment_bytes).decode("ascii"),
+                }]
             r = httpx.post(
                 f"https://graph.microsoft.com/v1.0/users/{self.graph_sender}/sendMail",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -88,23 +97,40 @@ class EmailService:
             logger.error(f"❌ Graph send error: {e}")
             return False
 
-    def _send_email(self, to_email: str, subject: str, html_content: str, from_name: str = None) -> bool:
-        """Send an email. Optional from_name overrides the sender display name."""
+    def _send_email(self, to_email: str, subject: str, html_content: str, from_name: str = None,
+                    attachment_bytes: bytes = None, attachment_name: str = None,
+                    attachment_mime: str = "application/pdf") -> bool:
+        """Send an email. Optional from_name and attachment."""
         if not self.enabled:
             logger.info(f"📧 Email not sent (not configured): {subject} -> {to_email}")
             return False
 
         if self.use_graph:
-            return self._graph_send(to_email, subject, html_content, from_name=from_name)
+            return self._graph_send(to_email, subject, html_content, from_name=from_name,
+                                   attachment_bytes=attachment_bytes, attachment_name=attachment_name,
+                                   attachment_mime=attachment_mime)
 
         try:
-            msg = MIMEMultipart('alternative')
+            if attachment_bytes and attachment_name:
+                msg = MIMEMultipart('mixed')
+                html_part = MIMEMultipart('alternative')
+                html_part.attach(MIMEText(html_content, 'html'))
+                msg.attach(html_part)
+                from email.mime.base import MIMEBase
+                from email import encoders
+                maintype, subtype = attachment_mime.split('/', 1)
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(attachment_bytes)
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
+                msg.attach(part)
+            else:
+                msg = MIMEMultipart('alternative')
+                msg.attach(MIMEText(html_content, 'html'))
+
             msg['Subject'] = subject
             msg['From'] = f"{from_name or self.from_name} <{self.from_email}>"
             msg['To'] = to_email
-
-            html_part = MIMEText(html_content, 'html')
-            msg.attach(html_part)
 
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
                 server.starttls()
@@ -437,10 +463,12 @@ class EmailService:
         return self._send_email(to_email, subject, html_content)
 
     def send_new_invoice_uploaded(self, to_email: str, full_name: str, invoice_number: str,
-                                   vendor_name: str, amount: float, currency: str, login_url: str = "") -> bool:
-        """Notify approvers that a new invoice has been uploaded and needs review."""
+                                   vendor_name: str, amount: float, currency: str, login_url: str = "",
+                                   attachment_path: str = None) -> bool:
+        """Notify approvers that a new invoice has been uploaded and needs review.
+        Optionally attaches the invoice PDF."""
         reset_link = f'<p><a href="{login_url}" class="btn">Review Invoice</a></p>' if login_url else ''
-        subject = "finnpayments - New Invoice Needs Review"
+        subject = f"finnpayments - New Invoice Needs Review: {invoice_number}"
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -467,6 +495,7 @@ class EmailService:
                         <strong>New Invoice Uploaded &mdash; Pending Review</strong>
                         <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been uploaded and needs your review.</p>
                     </div>
+                    <p>A copy of the invoice is attached to this email for your convenience. Please log in to finnpayments to review and approve it.</p>
                     {reset_link}
                     <p>Best regards,<br>finnpayments Team</p>
                 </div>
@@ -477,7 +506,19 @@ class EmailService:
         </body>
         </html>
         """
-        return self._send_email(to_email, subject, html_content)
+        # Read attachment file if provided
+        attachment_bytes = None
+        attachment_name = None
+        if attachment_path and os.path.exists(attachment_path):
+            try:
+                with open(attachment_path, 'rb') as f:
+                    attachment_bytes = f.read()
+                attachment_name = os.path.basename(attachment_path)
+            except Exception as e:
+                logger.error(f"Failed to read attachment {attachment_path}: {e}")
+
+        return self._send_email(to_email, subject, html_content, attachment_bytes=attachment_bytes,
+                               attachment_name=attachment_name)
 
 # Global email service instance
 email_service = EmailService()
