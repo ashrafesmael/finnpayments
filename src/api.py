@@ -3275,7 +3275,15 @@ async def get_dashboard_charts(
 # ─── Helper Functions ─────────────────────────────────────
 
 def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
-    """Convert Invoice ORM object to dict"""
+    """Convert Invoice ORM object to dict. Resolves user IDs to names."""
+    from src.auth_models import auth_db as _auth_db
+
+    def resolve_user(user_id):
+        if not user_id:
+            return None
+        u = _auth_db.get_user_by_id(user_id)
+        return u['full_name'] if u else user_id
+
     return {
         "invoice_id": invoice.invoice_id,
         "invoice_type": invoice.invoice_type,
@@ -3291,8 +3299,8 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "project_code": invoice.project_code,
         "cost_center": invoice.cost_center,
         "confidence_score": invoice.confidence_score,
-        "approved_by": invoice.approved_by,
-        "posted_by": invoice.posted_by,
+        "approved_by": resolve_user(invoice.approved_by),
+        "posted_by": resolve_user(invoice.posted_by),
         "tds_applicable": invoice.tds_applicable,
         "tds_rate": invoice.tds_rate,
         "tds_amount": invoice.tds_amount,
@@ -3300,7 +3308,10 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
         "tds_paid_date": invoice.tds_paid_date,
         "vendor_id": invoice.vendor_id,
         "vendor_match_confidence": invoice.vendor_match_confidence,
-        "assigned_to": invoice.assigned_to,
+        "assigned_to": resolve_user(invoice.assigned_to),
+        "assigned_to_id": invoice.assigned_to,
+        "approved_by_name": resolve_user(invoice.approved_by),
+        "posted_by_name": resolve_user(invoice.posted_by),
         "exchange_rate": invoice.exchange_rate,
         "total_amount_base": invoice.total_amount_base,
         "payment_bank_rate": invoice.payment_bank_rate,

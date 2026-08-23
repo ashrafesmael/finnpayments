@@ -1161,11 +1161,28 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
             <span className="detail-label">Assigned To</span>
             <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <AssigneeDropdown
-                currentAssignee={inv.assigned_to}
+                currentAssignee={inv.assigned_to_id}
                 onAssign={(userId) => assignInvoice(invoiceId, userId).then(() => getInvoice(invoiceId).then(setInv)).catch(e => alert(e.message))}
               />
             </span>
           </div>
+          {/* Approver/Poster info */}
+          {inv.approved_by && (
+            <div className="detail-row">
+              <span className="detail-label">Approved By</span>
+              <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: 'var(--accent)' }}>✓ {inv.approved_by}</span>
+              </span>
+            </div>
+          )}
+          {inv.posted_by && (
+            <div className="detail-row">
+              <span className="detail-label">Posted By</span>
+              <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: 'var(--blue)' }}>↗ {inv.posted_by}</span>
+              </span>
+            </div>
+          )}
         </div>
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Amounts</h3>
