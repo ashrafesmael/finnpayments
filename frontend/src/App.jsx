@@ -379,6 +379,7 @@ function InvoiceUpload({ onNavigate }) {
   const [error, setError] = useState(null);
   const [companyUsers, setCompanyUsers] = useState([]);
   const ref = useRef(null);
+  const cameraRef = useRef(null);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -426,6 +427,16 @@ function InvoiceUpload({ onNavigate }) {
             <div className="upload-zone-hint">PDF, Image, CSV, Excel supported</div>
           </>
         )}
+      </div>
+
+      {/* Mobile camera capture button */}
+      <div className="mobile-camera-btn" style={{ display: 'none' }}>
+        <input ref={cameraRef} type="file" accept="image/*" capture="environment"
+          style={{ display: 'none' }}
+          onChange={(e) => { if (e.target.files[0]) setFile(e.target.files[0]); }} />
+        <button className="btn btn-primary" onClick={() => cameraRef.current?.click()}>
+          📷 Take Photo of Invoice
+        </button>
       </div>
 
       <div className="form-grid">

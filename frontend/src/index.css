@@ -339,6 +339,12 @@ select.input {
 .pagination-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .pagination-info { font-size: 12px; color: var(--text-muted); margin-left: 8px; }
 
+/* ─── Mobile Camera Button ────────────────────────────── */
+.mobile-camera-btn { display: none !important; text-align: center; margin: 12px 0; }
+@media (max-width: 768px) {
+  .mobile-camera-btn { display: block !important; }
+}
+
 /* ─── Mobile Responsive ──────────────────────────────── */
 @media (max-width: 768px) {
   .app-layout { display: block; }
