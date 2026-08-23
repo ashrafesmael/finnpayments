@@ -400,6 +400,9 @@ async def upload_invoice(
         logger.info(f"📋 Multi-invoice upload: {len(result)} invoices detected")
         for r in result:
             try:
+                dup = _check_duplicate(r, company['id'])
+                if dup:
+                    r["duplicate_warning"] = dup
                 _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center, company['id'], uploader_user_id=assigned_to or user['id'])
                 results_store[r["invoice_id"]] = r
             except Exception as e:
@@ -415,6 +418,9 @@ async def upload_invoice(
         }
     
     # Single invoice
+    # Check for duplicates BEFORE saving
+    dup_check = _check_duplicate(result, company['id'])
+    
     try:
         _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center, company['id'], uploader_user_id=assigned_to or user['id'])
     except Exception as e:
@@ -425,8 +431,6 @@ async def upload_invoice(
     processing_time = time.time() - start_time
     result["processing_time"] = round(processing_time, 2)
 
-    # Check for duplicate warning
-    dup_check = _check_duplicate(result, company['id'])
     if dup_check:
         result["duplicate_warning"] = dup_check
 
