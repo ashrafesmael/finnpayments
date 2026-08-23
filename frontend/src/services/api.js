@@ -128,6 +128,14 @@ export const updateInvoiceStatus = (invoiceId, status) =>
 export const deleteInvoice = (invoiceId) =>
   apiRequest(`/invoices/${invoiceId}`, { method: 'DELETE' });
 
+// ─── Bulk Invoice Operations ────────────────────────────
+export const bulkApprove = (invoiceIds) =>
+  apiRequest('/invoices/bulk/approve', { method: 'POST', body: JSON.stringify({ invoice_ids: invoiceIds }) });
+export const bulkPost = (invoiceIds) =>
+  apiRequest('/invoices/bulk/post', { method: 'POST', body: JSON.stringify({ invoice_ids: invoiceIds }) });
+export const bulkDelete = (invoiceIds) =>
+  apiRequest('/invoices/bulk/delete', { method: 'POST', body: JSON.stringify({ invoice_ids: invoiceIds }) });
+
 // ─── Journal Entries ────────────────────────────────────
 export const getJournalEntries = (params = {}) => {
   const query = new URLSearchParams(params).toString();

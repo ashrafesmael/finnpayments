@@ -6,6 +6,7 @@ import {
   postJournalEntry, reverseJournalEntry, getChartOfAccounts, checkHealth,
   exportJournalEntriesExcel,
   exportJournalEntriesSage200,
+  bulkApprove, bulkPost, bulkDelete,
   updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
   getAuditLog,
   getVendors, createVendor, updateVendor, deleteVendor, linkInvoiceVendor, unlinkInvoiceVendor,
@@ -514,6 +515,8 @@ function InvoiceList({ onNavigate }) {
   const [search, setSearch] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [selected, setSelected] = useState(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -525,6 +528,7 @@ function InvoiceList({ onNavigate }) {
       if (endDate) params.end_date = endDate;
       const r = await getInvoices(params);
       setInvoices(r.invoices || []); setTotal(r.total || 0);
+      setSelected(new Set());
     }
     catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -532,12 +536,57 @@ function InvoiceList({ onNavigate }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const toggleSelect = (id) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelected(next);
+  };
+  const toggleSelectAll = () => {
+    if (selected.size === invoices.length) { setSelected(new Set()); }
+    else { setSelected(new Set(invoices.map(i => i.invoice_id))); }
+  };
+
+  const handleBulkApprove = async () => {
+    if (!selected.size) return;
+    setBulkLoading(true);
+    try { const r = await bulkApprove([...selected]); alert(r.message); load(); }
+    catch (e) { alert(e.message); }
+    finally { setBulkLoading(false); }
+  };
+  const handleBulkPost = async () => {
+    if (!selected.size) return;
+    setBulkLoading(true);
+    try { const r = await bulkPost([...selected]); alert(r.message + (r.errors.length ? '\n' + r.errors.join('\n') : '')); load(); }
+    catch (e) { alert(e.message); }
+    finally { setBulkLoading(false); }
+  };
+  const handleBulkDelete = async () => {
+    if (!selected.size) return;
+    if (!confirm(`Delete ${selected.size} invoice(s)? Posted/paid invoices will be skipped.`)) return;
+    setBulkLoading(true);
+    try { const r = await bulkDelete([...selected]); alert(r.message); load(); }
+    catch (e) { alert(e.message); }
+    finally { setBulkLoading(false); }
+  };
+
+  const selectedCount = selected.size;
+
   return (
     <div className="animate-fade-in space-y">
       <div className="page-header">
         <h2>Invoices <span className="count">({total})</span></h2>
         <button className="btn btn-primary" onClick={() => onNavigate('upload')}>+ Upload</button>
       </div>
+
+      {selectedCount > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '10px 16px', background: 'var(--bg-surface-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>{selectedCount} selected</span>
+          <button className="btn btn-sm btn-blue" onClick={handleBulkApprove} disabled={bulkLoading}>Approve</button>
+          <button className="btn btn-sm btn-primary" onClick={handleBulkPost} disabled={bulkLoading}>Post to GL</button>
+          <button className="btn btn-sm btn-danger" onClick={handleBulkDelete} disabled={bulkLoading}>Delete</button>
+          <button className="btn btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <input className="input" style={{ width: 260 }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search vendor or invoice #..." />
@@ -557,20 +606,24 @@ function InvoiceList({ onNavigate }) {
       <div className="card">
         {loading ? <Loading /> : (
           <table className="data-table">
-            <thead><tr><th>Invoice #</th><th>Vendor</th><th>Type</th><th>Amount</th><th>Status</th><th>Date</th><th></th></tr></thead>
+            <thead><tr>
+              <th style={{ width: 32 }}><input type="checkbox" checked={selected.size === invoices.length && invoices.length > 0} onChange={toggleSelectAll} /></th>
+              <th>Invoice #</th><th>Vendor</th><th>Type</th><th>Amount</th><th>Status</th><th>Date</th><th></th>
+            </tr></thead>
             <tbody>
               {invoices.map(inv => (
-                <tr key={inv.invoice_id} onClick={() => onNavigate('detail', inv.invoice_id)}>
-                  <td className="mono text-xs text-accent">{inv.invoice_number || inv.invoice_id?.slice(-10)}</td>
-                  <td>{inv.vendor_name}</td>
-                  <td className="text-xs text-muted">{inv.invoice_type}</td>
-                  <td className="mono text-sm">{fmtCurrency(inv.total_amount, inv.currency)}</td>
-                  <td><StatusBadge status={inv.status} /></td>
-                  <td className="text-xs text-muted">{inv.invoice_date}</td>
+                <tr key={inv.invoice_id} style={{ background: selected.has(inv.invoice_id) ? 'var(--accent-muted)' : '' }}>
+                  <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(inv.invoice_id)} onChange={() => toggleSelect(inv.invoice_id)} /></td>
+                  <td className="mono text-xs text-accent" onClick={() => onNavigate('detail', inv.invoice_id)}>{inv.invoice_number || inv.invoice_id?.slice(-10)}</td>
+                  <td onClick={() => onNavigate('detail', inv.invoice_id)}>{inv.vendor_name}</td>
+                  <td className="text-xs text-muted" onClick={() => onNavigate('detail', inv.invoice_id)}>{inv.invoice_type}</td>
+                  <td className="mono text-sm" onClick={() => onNavigate('detail', inv.invoice_id)}>{fmtCurrency(inv.total_amount, inv.currency)}</td>
+                  <td onClick={() => onNavigate('detail', inv.invoice_id)}><StatusBadge status={inv.status} /></td>
+                  <td className="text-xs text-muted" onClick={() => onNavigate('detail', inv.invoice_id)}>{inv.invoice_date}</td>
                   <td><button className="delete-btn" onClick={(e) => { e.stopPropagation(); if (confirm('Delete this invoice?')) deleteInvoice(inv.invoice_id).then(() => load()).catch(err => alert(err.message || 'Cannot delete posted/paid invoices')); }}><Icons.Trash /></button></td>
                 </tr>
               ))}
-              {invoices.length === 0 && <tr><td colSpan={7}><Empty text="No invoices found" /></td></tr>}
+              {invoices.length === 0 && <tr><td colSpan={8}><Empty text="No invoices found" /></td></tr>}
             </tbody>
           </table>
         )}

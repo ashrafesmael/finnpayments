@@ -963,6 +963,98 @@ Return ONLY valid JSON, no markdown."""
             "user_context": request.user_context,
         }
 
+
+# ─── Bulk Invoice Operations ────────────────────────────
+
+class BulkActionRequest(PydanticBaseModel):
+    invoice_ids: List[str]
+
+
+@app.post("/invoices/bulk/approve")
+async def bulk_approve(request: BulkActionRequest, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Approve multiple pending_review invoices at once."""
+    approved = 0
+    skipped = 0
+    errors = []
+    with get_db() as db:
+        for inv_id in request.invoice_ids:
+            invoice = db.query(Invoice).filter(Invoice.invoice_id == inv_id, Invoice.company_id == company['id']).first()
+            if not invoice:
+                errors.append(f"{inv_id}: not found")
+                continue
+            if invoice.status != "pending_review":
+                skipped += 1
+                continue
+            invoice.status = "approved"
+            invoice.approved_by = user['id']
+            invoice.updated_at = datetime.utcnow()
+            approved += 1
+            log_audit("invoice_approved", user, entity_type="invoice", entity_id=inv_id,
+                      description=f"Invoice {invoice.invoice_number} approved (bulk)", company_id=company['id'])
+        db.commit()
+    return {"message": f"{approved} approved, {skipped} skipped", "approved": approved, "skipped": skipped, "errors": errors}
+
+
+@app.post("/invoices/bulk/post")
+async def bulk_post(request: BulkActionRequest, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Post multiple approved invoices to the GL at once."""
+    posted = 0
+    skipped = 0
+    errors = []
+    with get_db() as db:
+        for inv_id in request.invoice_ids:
+            invoice = db.query(Invoice).filter(Invoice.invoice_id == inv_id, Invoice.company_id == company['id']).first()
+            if not invoice:
+                errors.append(f"{inv_id}: not found")
+                continue
+            if invoice.status != "approved":
+                skipped += 1
+                continue
+            # Maker/checker check
+            if company.get('maker_checker_enabled') and invoice.approved_by and invoice.approved_by == user['id']:
+                errors.append(f"{invoice.invoice_number}: maker/checker blocked (you approved this)")
+                continue
+            invoice.status = "posted"
+            invoice.posted_by = user['id']
+            invoice.updated_at = datetime.utcnow()
+            for je in invoice.journal_entries:
+                je.status = "posted"
+                je.posted_by = user['id']
+            posted += 1
+            log_audit("invoice_posted", user, entity_type="invoice", entity_id=inv_id,
+                      description=f"Invoice {invoice.invoice_number} posted (bulk)", company_id=company['id'])
+        db.commit()
+    return {"message": f"{posted} posted, {skipped} skipped", "posted": posted, "skipped": skipped, "errors": errors}
+
+
+@app.post("/invoices/bulk/delete")
+async def bulk_delete(request: BulkActionRequest, company: dict = Depends(get_current_company), user: dict = Depends(get_current_user)):
+    """Delete multiple draft/pending invoices at once (cannot delete posted/paid)."""
+    deleted = 0
+    skipped = 0
+    errors = []
+    with get_db() as db:
+        for inv_id in request.invoice_ids:
+            invoice = db.query(Invoice).filter(Invoice.invoice_id == inv_id, Invoice.company_id == company['id']).first()
+            if not invoice:
+                errors.append(f"{inv_id}: not found")
+                continue
+            if invoice.status in ("posted", "paid"):
+                skipped += 1
+                continue
+            # Delete journal entries and line items first
+            for je in invoice.journal_entries:
+                db.query(JournalEntryLineDB).filter(JournalEntryLineDB.entry_id == je.entry_id).delete()
+                db.query(JournalEntryDB).filter(JournalEntryDB.entry_id == je.entry_id).delete()
+            db.query(InvoiceLineItemDB).filter(InvoiceLineItemDB.invoice_id == inv_id).delete()
+            db.query(Invoice).filter(Invoice.invoice_id == inv_id).delete()
+            deleted += 1
+            log_audit("invoice_deleted", user, entity_type="invoice", entity_id=inv_id,
+                      description=f"Invoice {invoice.invoice_number} deleted (bulk)", company_id=company['id'])
+        db.commit()
+    return {"message": f"{deleted} deleted, {skipped} skipped", "deleted": deleted, "skipped": skipped, "errors": errors}
+
+
 @app.delete("/invoices/{invoice_id}")
 async def delete_invoice(invoice_id: str, company: dict = Depends(get_current_company)):
     """Delete an invoice (only if draft or pending)"""
