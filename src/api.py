@@ -204,8 +204,7 @@ async def health_check():
 
 @app.get("/invoice-action")
 async def invoice_action(token: str):
-    """Process approve/decline action from email link. No login required.
-    Returns an HTML confirmation page."""
+    """Process approve action or show decline form from email link. No login required."""
     payload = verify_action_token(token)
     if not payload:
         return HTMLResponse(content="""
@@ -232,6 +231,7 @@ async def invoice_action(token: str):
             """)
 
         if action == "approve":
+            # Process immediately
             invoice.status = "approved"
             invoice.approved_by = payload['user_id']
             invoice.updated_at = datetime.utcnow()
@@ -240,42 +240,110 @@ async def invoice_action(token: str):
                       entity_type="invoice", entity_id=invoice_id,
                       description=f"Invoice {invoice.invoice_number} approved via email link",
                       company_id=invoice.company_id)
-            title = "Invoice Approved"
-            message = f"Invoice {invoice.invoice_number} from {invoice.vendor_name} has been approved successfully."
-            color = "#10b981"
+            return _action_result_page("approved", invoice.invoice_number, invoice.vendor_name)
+
         elif action == "decline":
-            invoice.status = "rejected"
-            invoice.updated_at = datetime.utcnow()
-            db.commit()
-            log_audit("email_declined", {"id": payload['user_id'], "email": "email_action"},
-                      entity_type="invoice", entity_id=invoice_id,
-                      description=f"Invoice {invoice.invoice_number} declined via email link",
-                      company_id=invoice.company_id)
-            title = "Invoice Declined"
-            message = f"Invoice {invoice.invoice_number} from {invoice.vendor_name} has been declined."
-            color = "#ef4444"
+            # Show a form with a comment box
+            return HTMLResponse(content=f"""
+            <!DOCTYPE html><html><head><title>finnpayments - Decline Invoice</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0b1120; color: #e2e8f0; }}
+                .container {{ max-width: 500px; padding: 40px; }}
+                h1 {{ color: #ef4444; margin-bottom: 16px; }}
+                .invoice-info {{ background: #1c2d4a; padding: 16px; border-radius: 8px; margin: 16px 0; font-size: 14px; }}
+                textarea {{ width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #243555; background: #162036; color: #e2e8f0; font-size: 14px; font-family: Arial; min-height: 100px; resize: vertical; }}
+                .btn {{ display: inline-block; background: #ef4444; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; border: none; cursor: pointer; font-size: 15px; }}
+                .btn-cancel {{ background: #243555; margin-left: 8px; }}
+            </style></head>
+            <body>
+                <div class="container">
+                    <h1>Decline Invoice</h1>
+                    <div class="invoice-info">
+                        <strong>Invoice:</strong> {invoice.invoice_number}<br>
+                        <strong>Vendor:</strong> {invoice.vendor_name}<br>
+                        <strong>Amount:</strong> {invoice.currency} {invoice.total_amount:,.2f}
+                    </div>
+                    <p>Please provide a reason for declining this invoice:</p>
+                    <form action="/api/invoice-action" method="POST">
+                        <input type="hidden" name="token" value="{token}">
+                        <textarea name="comment" placeholder="Reason for declining..."></textarea>
+                        <div style="margin-top: 16px;">
+                            <button type="submit" class="btn">Confirm Decline</button>
+                            <a href="https://payments.finnverify.com" class="btn btn-cancel" style="text-decoration:none; display:inline-block;">Cancel</a>
+                        </div>
+                    </form>
+                </div>
+            </body></html>
+            """)
+
         else:
             return HTMLResponse(content="<h1>Invalid action</h1>", status_code=400)
 
-    return HTMLResponse(content=f"""
-    <!DOCTYPE html><html><head><title>finnpayments - {title}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0b1120; color: #e2e8f0; }}
-        .container {{ text-align: center; max-width: 500px; padding: 40px; }}
-        h1 {{ color: {color}; margin-bottom: 16px; }}
-        .icon {{ font-size: 48px; margin-bottom: 20px; }}
-        .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
-    </style></head>
-    <body>
-        <div class="container">
-            <div class="icon">{'✓' if action == 'approve' else '✕'}</div>
-            <h1>{title}</h1>
-            <p>{message}</p>
-            <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
-            <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a>
-        </div>
-    </body></html>
-    """)
+
+@app.post("/invoice-action")
+async def invoice_action_submit(token: str = Form(...), comment: str = Form("")):
+    """Process the decline form submission with a comment."""
+    payload = verify_action_token(token)
+    if not payload:
+        return HTMLResponse(content="<h1>Invalid or Expired Link</h1>", status_code=400)
+
+    invoice_id = payload['invoice_id']
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            return HTMLResponse(content="<h1>Invoice not found</h1>", status_code=404)
+
+        if invoice.status != "pending_review":
+            return HTMLResponse(content=f"<h1>Already Processed</h1><p>Invoice {invoice.invoice_number} has already been {invoice.status}.</p>")
+
+        invoice.status = "rejected"
+        invoice.updated_at = datetime.utcnow()
+        if comment:
+            invoice.notes = (invoice.notes or '') + f"\n[Declined via email: {comment}]"
+        db.commit()
+        log_audit("email_declined", {"id": payload['user_id'], "email": "email_action"},
+                  entity_type="invoice", entity_id=invoice_id,
+                  description=f"Invoice {invoice.invoice_number} declined via email link. Reason: {comment or 'No reason provided'}",
+                  company_id=invoice.company_id)
+
+    return _action_result_page("declined", invoice.invoice_number, invoice.vendor_name, comment)
+
+
+def _action_result_page(action: str, invoice_number: str, vendor_name: str, comment: str = None) -> HTMLResponse:
+    """Return a styled HTML confirmation page."""
+    if action == "approved":
+        return HTMLResponse(content=f"""
+        <!DOCTYPE html><html><head><title>finnpayments - Approved</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0b1120; color: #e2e8f0; }}
+            .container {{ text-align: center; max-width: 500px; padding: 40px; }}
+            h1 {{ color: #10b981; margin-bottom: 16px; }}
+            .icon {{ font-size: 48px; margin-bottom: 20px; }}
+            .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
+        </style></head>
+        <body><div class="container"><div class="icon">✓</div><h1>Invoice Approved</h1>
+        <p>Invoice {invoice_number} from {vendor_name} has been approved successfully.</p>
+        <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
+        <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a></div></body></html>
+        """)
+    else:
+        comment_html = f'<div style="background:#1c2d4a;padding:12px;border-radius:8px;margin:16px 0;font-size:14px;text-align:left;"><strong>Reason:</strong> {comment}</div>' if comment else ''
+        return HTMLResponse(content=f"""
+        <!DOCTYPE html><html><head><title>finnpayments - Declined</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0b1120; color: #e2e8f0; }}
+            .container {{ text-align: center; max-width: 500px; padding: 40px; }}
+            h1 {{ color: #ef4444; margin-bottom: 16px; }}
+            .icon {{ font-size: 48px; margin-bottom: 20px; }}
+            .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
+        </style></head>
+        <body><div class="container"><div class="icon">✕</div><h1>Invoice Declined</h1>
+        <p>Invoice {invoice_number} from {vendor_name} has been declined.</p>
+        {comment_html}
+        <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
+        <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a></div></body></html>
+        """)
 
 
 # ─── Invoice Upload & Processing ─────────────────────────
