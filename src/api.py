@@ -3397,8 +3397,8 @@ def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str
 
         # Multi-currency: convert to base (MUR) at booking
         currency = extracted.get("currency", "MUR")
-        total = extracted.get("total_amount", 0.0)
-        if currency and currency.upper() != "MUR":
+        total = extracted.get("total_amount") or 0.0
+        if currency and currency.upper() != "MUR" and total > 0:
             invoice_date = extracted.get("invoice_date", "")
             rate = get_exchange_rate(currency, invoice_date)
             invoice.exchange_rate = rate

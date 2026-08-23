@@ -184,11 +184,27 @@ async def process_multi_invoice_pdf(file_path: str, invoice_type: str = "supplie
 
 
 def extract_text_from_image(file_path: str) -> str:
-    """Extract text from image using OCR (Tesseract)"""
+    """Extract text from image using OCR (Tesseract) with preprocessing for photos."""
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageEnhance, ImageFilter
         image = Image.open(file_path)
+
+        # Preprocess for better OCR on photos
+        # Convert to grayscale
+        if image.mode != 'L':
+            image = image.convert('L')
+        # Upscale small images (helps with phone photos)
+        width, height = image.size
+        if width < 1500:
+            scale = 1500 / width
+            image = image.resize((int(width * scale), int(height * scale)), Image.Resampling.LANCZOS)
+        # Increase contrast
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(1.5)
+        # Sharpen
+        image = image.filter(ImageFilter.SHARPEN)
+
         text = pytesseract.image_to_string(image)
         logger.info(f"🖼️ OCR extracted {len(text)} chars from image")
         return text
