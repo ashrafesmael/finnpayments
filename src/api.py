@@ -3035,7 +3035,7 @@ async def aging_report(company: dict = Depends(get_current_company)):
         ).all()
 
         today = date.today()
-        buckets = {'current': 0, '1_30': 0, '31_60': 0, '61_90': 0, '90_plus': 0}
+        buckets = {'current': 0, '31_60': 0, '61_90': 0, '90_plus': 0}
         ap_data = {'total': 0, 'count': 0, 'buckets': {**buckets}, 'invoices': []}
         ar_data = {'total': 0, 'count': 0, 'buckets': {**buckets}, 'invoices': []}
 
@@ -3049,10 +3049,8 @@ async def aging_report(company: dict = Depends(get_current_company)):
             days_outstanding = (today - inv_date).days
             amount = inv.total_amount_base or inv.total_amount or 0
 
-            if days_outstanding <= 0:
+            if days_outstanding <= 30:
                 bucket = 'current'
-            elif days_outstanding <= 30:
-                bucket = '1_30'
             elif days_outstanding <= 60:
                 bucket = '31_60'
             elif days_outstanding <= 90:

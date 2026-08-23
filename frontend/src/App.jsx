@@ -1946,7 +1946,7 @@ function AgingReport({ onNavigate }) {
   if (!data) return <Empty text="Failed to load aging report" />;
 
   const d = data[tab];
-  const bucketLabels = { current: 'Current (0 days)', '1_30': '1-30 days', '31_60': '31-60 days', '61_90': '61-90 days', '90_plus': '90+ days' };
+  const bucketLabels = { current: 'Current (0-30 days)', '31_60': '31-60 days', '61_90': '61-90 days', '90_plus': '90+ days' };
 
   // Filter invoices by age bucket
   const filteredInvoices = ageFilter ? d.invoices.filter(inv => inv.bucket === ageFilter) : d.invoices;
@@ -1965,8 +1965,7 @@ function AgingReport({ onNavigate }) {
 
       <div className="filter-bar">
         <button className={`filter-pill ${ageFilter === '' ? 'active' : ''}`} onClick={() => setAgeFilter('')}>All Ages</button>
-        <button className={`filter-pill ${ageFilter === 'current' ? 'active' : ''}`} onClick={() => setAgeFilter('current')}>Current (0 days)</button>
-        <button className={`filter-pill ${ageFilter === '1_30' ? 'active' : ''}`} onClick={() => setAgeFilter('1_30')}>1-30 days</button>
+        <button className={`filter-pill ${ageFilter === 'current' ? 'active' : ''}`} onClick={() => setAgeFilter('current')}>Current (0-30 days)</button>
         <button className={`filter-pill ${ageFilter === '31_60' ? 'active' : ''}`} onClick={() => setAgeFilter('31_60')}>31-60 days</button>
         <button className={`filter-pill ${ageFilter === '61_90' ? 'active' : ''}`} onClick={() => setAgeFilter('61_90')}>61-90 days</button>
         <button className={`filter-pill ${ageFilter === '90_plus' ? 'active' : ''}`} onClick={() => setAgeFilter('90_plus')}>90+ days</button>
