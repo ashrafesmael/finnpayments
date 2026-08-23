@@ -95,6 +95,8 @@ export const getDashboardStats = (period = 'all', startDate, endDate) => {
   return apiRequest(`/dashboard/stats?${query}`);
 };
 export const getDashboardCharts = () => apiRequest('/dashboard/charts');
+export const getAgingReport = () => apiRequest('/reports/aging');
+export const globalSearch = (q) => apiRequest(`/search?q=${encodeURIComponent(q)}`);
 
 // ─── Invoices ───────────────────────────────────────────
 export const getInvoices = (params = {}) => {

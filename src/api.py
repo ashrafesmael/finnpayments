@@ -416,6 +416,11 @@ async def upload_invoice(
     processing_time = time.time() - start_time
     result["processing_time"] = round(processing_time, 2)
 
+    # Check for duplicate warning
+    dup_check = _check_duplicate(result, company['id'])
+    if dup_check:
+        result["duplicate_warning"] = dup_check
+
     # Notify the assigned user about the new invoice (only the assignee, not all company users)
     try:
         from src.auth_models import auth_db as _auth_db
@@ -2969,6 +2974,137 @@ async def suggest_account(description: str, type: str = "supplier", company: dic
     return {"account_code": code, "account_name": name, "description": description}
 
 
+# ─── Aging Report ───────────────────────────────────────
+
+@app.get("/reports/aging")
+async def aging_report(company: dict = Depends(get_current_company)):
+    """AP/AR aging report — outstanding invoices grouped by age buckets."""
+    from datetime import date
+
+    with get_db() as db:
+        invoices = db.query(Invoice).filter(
+            Invoice.company_id == company['id'],
+            Invoice.status.in_(['pending_review', 'approved', 'posted', 'paid']),
+        ).all()
+
+        today = date.today()
+        buckets = {'current': 0, '1_30': 0, '31_60': 0, '61_90': 0, '90_plus': 0}
+        ap_data = {'total': 0, 'count': 0, 'buckets': {**buckets}, 'invoices': []}
+        ar_data = {'total': 0, 'count': 0, 'buckets': {**buckets}, 'invoices': []}
+
+        for inv in invoices:
+            inv_date = None
+            try:
+                inv_date = date.fromisoformat(inv.invoice_date[:10]) if inv.invoice_date else today
+            except (ValueError, TypeError):
+                inv_date = today
+
+            days_outstanding = (today - inv_date).days
+            amount = inv.total_amount_base or inv.total_amount or 0
+
+            if days_outstanding <= 0:
+                bucket = 'current'
+            elif days_outstanding <= 30:
+                bucket = '1_30'
+            elif days_outstanding <= 60:
+                bucket = '31_60'
+            elif days_outstanding <= 90:
+                bucket = '61_90'
+            else:
+                bucket = '90_plus'
+
+            entry = {
+                'invoice_id': inv.invoice_id,
+                'invoice_number': inv.invoice_number,
+                'vendor_name': inv.vendor_name,
+                'invoice_date': inv.invoice_date,
+                'due_date': inv.due_date,
+                'amount': round(amount, 2),
+                'currency': inv.currency,
+                'status': inv.status,
+                'days_outstanding': days_outstanding,
+                'bucket': bucket,
+            }
+
+            if inv.invoice_type == 'supplier':
+                ap_data['total'] += amount
+                ap_data['count'] += 1
+                ap_data['buckets'][bucket] += amount
+                ap_data['invoices'].append(entry)
+            elif inv.invoice_type == 'client':
+                ar_data['total'] += amount
+                ar_data['count'] += 1
+                ar_data['buckets'][bucket] += amount
+                ar_data['invoices'].append(entry)
+
+        for d in [ap_data, ar_data]:
+            d['total'] = round(d['total'], 2)
+            d['buckets'] = {k: round(v, 2) for k, v in d['buckets'].items()}
+
+        return {'payable': ap_data, 'receivable': ar_data}
+
+
+# ─── Global Search ──────────────────────────────────────
+
+@app.get("/search")
+async def global_search(q: str = Query(..., min_length=2), company: dict = Depends(get_current_company)):
+    """Search across invoices, journal entries, vendors, and audit log."""
+    results = {'invoices': [], 'entries': [], 'vendors': [], 'audit': [], 'total': 0}
+
+    with get_db() as db:
+        # Search invoices
+        inv_results = db.query(Invoice).filter(
+            Invoice.company_id == company['id'],
+            ((Invoice.vendor_name.ilike(f"%{q}%")) |
+             (Invoice.invoice_number.ilike(f"%{q}%")) |
+             (Invoice.notes.ilike(f"%{q}%")))
+        ).limit(10).all()
+        results['invoices'] = [
+            {'invoice_id': i.invoice_id, 'invoice_number': i.invoice_number, 'vendor_name': i.vendor_name,
+             'status': i.status, 'amount': i.total_amount_base or i.total_amount, 'invoice_date': i.invoice_date}
+            for i in inv_results
+        ]
+
+        # Search journal entries
+        je_results = db.query(JournalEntryDB).filter(
+            JournalEntryDB.company_id == company['id'],
+            ((JournalEntryDB.entry_id.ilike(f"%{q}%")) |
+             (JournalEntryDB.reference.ilike(f"%{q}%")) |
+             (JournalEntryDB.description.ilike(f"%{q}%")))
+        ).limit(10).all()
+        results['entries'] = [
+            {'entry_id': e.entry_id, 'reference': e.reference, 'description': e.description,
+             'status': e.status, 'entry_date': e.entry_date, 'total_debit': e.total_debit}
+            for e in je_results
+        ]
+
+        # Search vendors
+        vendor_results = db.query(Vendor).filter(
+            Vendor.company_id == company['id'],
+            ((Vendor.name.ilike(f"%{q}%")) |
+             (Vendor.brn.ilike(f"%{q}%")) |
+             (Vendor.email.ilike(f"%{q}%")))
+        ).limit(10).all()
+        results['vendors'] = [
+            {'id': v.id, 'name': v.name, 'brn': v.brn, 'email': v.email}
+            for v in vendor_results
+        ]
+
+        # Search audit log
+        audit_results = db.query(AuditLog).filter(
+            AuditLog.company_id == company['id'],
+            AuditLog.description.ilike(f"%{q}%")
+        ).order_by(AuditLog.timestamp.desc()).limit(10).all()
+        results['audit'] = [
+            {'id': a.id, 'action': a.action, 'description': a.description,
+             'user_email': a.user_email, 'timestamp': a.timestamp.isoformat() if a.timestamp else None}
+            for a in audit_results
+        ]
+
+        results['total'] = len(results['invoices']) + len(results['entries']) + len(results['vendors']) + len(results['audit'])
+        return results
+
+
 # ─── Dashboard ────────────────────────────────────────────
 
 @app.get("/dashboard/stats")
@@ -3166,11 +3302,39 @@ def _invoice_to_dict(invoice: Invoice) -> Dict[str, Any]:
     }
 
 
+def _check_duplicate(result: Dict, company_id: str) -> Optional[dict]:
+    """Check if a similar invoice already exists (same number + vendor)."""
+    extracted = result.get("extracted_data", {})
+    inv_number = extracted.get("invoice_number")
+    vendor = extracted.get("vendor_name")
+    if not inv_number or inv_number == "N/A" or not vendor:
+        return None
+    with get_db() as dup_db:
+        dup = dup_db.query(Invoice).filter(
+            Invoice.company_id == company_id,
+            Invoice.invoice_number == inv_number,
+            Invoice.vendor_name == vendor,
+        ).first()
+        if dup:
+            warning = {
+                'existing_invoice_id': dup.invoice_id,
+                'invoice_number': dup.invoice_number,
+                'vendor_name': dup.vendor_name,
+                'amount': dup.total_amount,
+                'status': dup.status,
+                'invoice_date': dup.invoice_date,
+                'message': f'A similar invoice already exists: {dup.invoice_number} from {dup.vendor_name} (status: {dup.status}, amount: {dup.total_amount})',
+            }
+            logger.warning(f"⚠️ Possible duplicate: {inv_number} from {vendor} already exists as {dup.invoice_id}")
+            return warning
+    return None
+
+
 def _save_invoice_to_db(result: Dict, invoice_type: str, file_path: Optional[str], project_code: Optional[str], cost_center: Optional[str], company_id: str = None, uploader_user_id: str = None):
     """Save processed invoice and its entries to the database"""
     extracted = result.get("extracted_data", {})
     invoice_id = result["invoice_id"]
-    
+
     with get_db() as db:
         invoice = Invoice(
             invoice_id=invoice_id,

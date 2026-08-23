@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import {
-  getDashboardStats, getDashboardCharts, getInvoices, getInvoice, uploadInvoice,
+  getDashboardStats, getDashboardCharts,
+  getAgingReport, globalSearch, getInvoices, getInvoice, uploadInvoice,
   updateInvoiceStatus, deleteInvoice, getJournalEntries,
   postJournalEntry, reverseJournalEntry, getChartOfAccounts, checkHealth,
   exportJournalEntriesExcel,
@@ -82,6 +83,7 @@ function Sidebar({ active, onNavigate, health, theme, onToggleTheme, onReset, re
     { id: 'fxrates', label: 'Exchange Rates', icon: Icons.Dollar },
     { id: 'rules', label: 'Learned Rules', icon: Icons.Brain },
     { id: 'tds', label: 'TDS Register', icon: Icons.Dollar },
+    { id: 'aging', label: 'Aging Report', icon: Icons.Clock },
     ...(isAdmin ? [{ id: 'audit', label: 'Audit Log', icon: Icons.List }] : []),
     ...(isAdmin ? [{ id: 'admin', label: 'User Management', icon: Icons.Users }] : []),
   ];
@@ -519,6 +521,19 @@ function UploadResult({ result, onNavigate, onReset }) {
         <button className="back-btn" onClick={onReset}><Icons.ArrowLeft /></button>
         <h2 style={{ fontSize: 24, fontWeight: 600, color: 'var(--text-white)' }}>Processing Result</h2>
       </div>
+
+      {result.duplicate_warning && (
+        <div className="card" style={{ padding: 16, borderColor: 'var(--amber)', borderWidth: 1, borderStyle: 'solid', background: 'var(--amber-muted)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 18 }}>⚠️</span>
+            <strong style={{ color: 'var(--amber)', fontSize: 14 }}>Possible Duplicate Invoice</strong>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{result.duplicate_warning.message}</p>
+          <button className="btn btn-sm" style={{ marginTop: 8 }} onClick={() => onNavigate('detail', result.duplicate_warning.existing_invoice_id)}>
+            View Existing Invoice →
+          </button>
+        </div>
+      )}
 
       <div className="success-banner">
         <div>
@@ -1875,6 +1890,68 @@ function VendorMaster() {
   );
 }
 
+function AgingReport({ onNavigate }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('payable');
+
+  useEffect(() => { getAgingReport().then(setData).catch(console.error).finally(() => setLoading(false)); }, []);
+
+  if (loading) return <Loading />;
+  if (!data) return <Empty text="Failed to load aging report" />;
+
+  const d = data[tab];
+  const bucketLabels = { current: 'Current (0 days)', '1_30': '1-30 days', '31_60': '31-60 days', '61_90': '61-90 days', '90_plus': '90+ days' };
+
+  return (
+    <div className="animate-fade-in space-y">
+      <div className="page-header">
+        <h2>Aging Report</h2>
+      </div>
+
+      <div className="filter-bar">
+        <button className={`filter-pill ${tab === 'payable' ? 'active' : ''}`} onClick={() => setTab('payable')}>Accounts Payable ({data.payable.count})</button>
+        <button className={`filter-pill ${tab === 'receivable' ? 'active' : ''}`} onClick={() => setTab('receivable')}>Accounts Receivable ({data.receivable.count})</button>
+      </div>
+
+      <div className="stats-grid">
+        {Object.entries(d.buckets).map(([key, amount], i) => (
+          <div key={i} className="stat-card">
+            <div className="stat-card-header"><span className="stat-card-label">{bucketLabels[key]}</span></div>
+            <div className="stat-card-value" style={{ fontSize: 18 }}>{fmtCurrency(amount)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card" style={{ marginTop: 16, padding: 16 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Total Outstanding: {fmtCurrency(d.total)}</div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><h3>{tab === 'payable' ? 'Payable' : 'Receivable'} Invoices ({d.count})</h3></div>
+        <table className="data-table">
+          <thead><tr><th>Invoice #</th><th>Vendor</th><th>Date</th><th>Due Date</th><th>Amount</th><th>Days</th><th>Bucket</th><th>Status</th></tr></thead>
+          <tbody>
+            {d.invoices.map((inv, i) => (
+              <tr key={i} onClick={() => onNavigate('detail', inv.invoice_id)} style={{ cursor: 'pointer' }}>
+                <td className="mono text-xs text-accent">{inv.invoice_number}</td>
+                <td>{inv.vendor_name}</td>
+                <td className="text-xs text-muted">{inv.invoice_date}</td>
+                <td className="text-xs text-muted">{inv.due_date || '-'}</td>
+                <td className="mono text-sm">{fmtCurrency(inv.amount, inv.currency)}</td>
+                <td className="mono text-sm">{inv.days_outstanding}</td>
+                <td><span className={`badge ${inv.bucket === 'current' ? 'badge-posted' : inv.bucket === '90_plus' ? 'badge-rejected' : 'badge-pending_review'}`}>{bucketLabels[inv.bucket]}</span></td>
+                <td><StatusBadge status={inv.status} /></td>
+              </tr>
+            ))}
+            {d.invoices.length === 0 && <tr><td colSpan={8}><Empty text="No outstanding invoices" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function Pagination({ total, page, pageSize, onPageChange }) {
   const totalPages = Math.ceil(total / pageSize) || 1;
   if (total <= pageSize) return null;
@@ -1933,6 +2010,22 @@ function AppLayout() {
 
   const nav = (v, id = null) => { setView(v); setSelectedId(id); window.scrollTo(0, 0); setMobileMenuOpen(false); };
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+
+  const handleSearch = async (q) => {
+    setSearchQuery(q);
+    if (q.length < 2) { setSearchResults(null); setShowSearch(false); return; }
+    setSearchLoading(true); setShowSearch(true);
+    try {
+      const r = await globalSearch(q);
+      setSearchResults(r);
+    } catch (e) { console.error(e); }
+    finally { setSearchLoading(false); }
+  };
+
   const handleReset = async () => {
     if (!window.confirm(`This will permanently delete ALL invoices and journal entries for ${selectedCompany?.name || 'the active company'}.\n\nChart of accounts and learned classification rules are kept.\n\nAre you sure?`)) return;
     setResetting(true);
@@ -1984,6 +2077,48 @@ function AppLayout() {
         onCloseMobile={() => setMobileMenuOpen(false)}
       />
       <main className="main-content">
+        {/* Global Search */}
+        <div style={{ position: 'relative', marginBottom: 16 }}>
+          <input
+            className="input" style={{ width: '100%', maxWidth: 400 }}
+            value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
+            placeholder="Search invoices, entries, vendors, audit log..."
+          />
+          {showSearch && searchResults && (
+            <div className="card" style={{ position: 'absolute', top: '100%', left: 0, right: 0, maxWidth: 500, zIndex: 100, maxHeight: 400, overflow: 'auto' }}>
+              {searchLoading ? <div style={{ padding: 16, fontSize: 13, color: 'var(--text-muted)' }}>Searching...</div> : (
+                <>
+                  {searchResults.total === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--text-muted)' }}>No results found</div>}
+                  {searchResults.invoices.map((inv, i) => (
+                    <div key={`inv${i}`} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => { nav('detail', inv.invoice_id); setShowSearch(false); setSearchQuery(''); }}>
+                      <span className="badge badge-draft" style={{ fontSize: 10, marginRight: 6 }}>Invoice</span>
+                      <span className="mono text-xs text-accent">{inv.invoice_number}</span> — {inv.vendor_name} ({inv.status})
+                    </div>
+                  ))}
+                  {searchResults.entries.map((e, i) => (
+                    <div key={`je${i}`} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => { nav('entries'); setShowSearch(false); setSearchQuery(''); }}>
+                      <span className="badge badge-posted" style={{ fontSize: 10, marginRight: 6 }}>Journal</span>
+                      <span className="mono text-xs text-accent">{e.entry_id}</span> — {e.reference} ({e.status})
+                    </div>
+                  ))}
+                  {searchResults.vendors.map((v, i) => (
+                    <div key={`ven${i}`} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => { nav('vendors'); setShowSearch(false); setSearchQuery(''); }}>
+                      <span className="badge" style={{ fontSize: 10, marginRight: 6, background: 'var(--blue-muted)', color: 'var(--blue)' }}>Vendor</span>
+                      {v.name} {v.brn ? `· BRN: ${v.brn}` : ''}
+                    </div>
+                  ))}
+                  {searchResults.audit.map((a, i) => (
+                    <div key={`aud${i}`} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                      <span className="badge badge-pending_review" style={{ fontSize: 10, marginRight: 6 }}>Audit</span>
+                      <span className="text-xs">{a.description}</span>
+                      <span className="text-muted text-xs" style={{ marginLeft: 6 }}>— {a.user_email}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
         {view === 'dashboard' && <Dashboard onNavigate={nav} />}
         {view === 'upload' && <InvoiceUpload onNavigate={nav} />}
         {view === 'invoices' && <InvoiceList onNavigate={nav} />}
@@ -1995,6 +2130,7 @@ function AppLayout() {
         {view === 'fxrates' && <ExchangeRates />}
         {view === 'rules' && <LearnedRules />}
         {view === 'tds' && <TdsRegister />}
+        {view === 'aging' && <AgingReport onNavigate={nav} />}
         {view === 'audit' && isAdmin() && <AuditLog />}
         {view === 'admin' && isAdmin() && <AdminPanel />}
       </main>
