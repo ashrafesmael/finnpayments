@@ -65,7 +65,44 @@ def extract_text_from_pdf(file_path: str) -> str:
 
 
 def ocr_pdf(file_path: str) -> str:
-    """Convert PDF pages to images and run Tesseract OCR."""
+    """Convert PDF pages to images and run OCR (OCR.space first, Tesseract fallback)."""
+    # Try OCR.space for the whole PDF first
+    ocrspace_key = os.getenv('OCRSPACE_API_KEY')
+    if ocrspace_key:
+        try:
+            import base64
+            import httpx
+            with open(file_path, 'rb') as f:
+                file_data = f.read()
+            
+            file_size = len(file_data)
+            if file_size <= 900 * 1024:  # OCR.space free limit
+                base64_image = f"data:application/pdf;base64," + base64.b64encode(file_data).decode('utf-8')
+                payload = {
+                    'base64Image': base64_image,
+                    'language': 'eng',
+                    'isOverlayRequired': 'false',
+                    'detectOrientation': 'true',
+                    'scale': 'true',
+                    'isTable': 'true',
+                    'OCREngine': '2',
+                }
+                headers = {'apikey': ocrspace_key}
+                logger.info("🔍 Trying OCR.space API for scanned PDF...")
+                response = httpx.post('https://api.ocr.space/parse/image', data=payload, headers=headers, timeout=120.0)
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('OCRExitCode') in (1, 2):
+                        extracted_text = ""
+                        for pr in result.get('ParsedResults', []):
+                            extracted_text += pr.get('ParsedText', '') + "\n"
+                        if extracted_text.strip():
+                            logger.info(f"✅ OCR.space extracted {len(extracted_text)} chars from PDF")
+                            return extracted_text.strip()
+        except Exception as e:
+            logger.warning(f"⚠️ OCR.space for PDF failed: {e}, falling back to Tesseract")
+
+    # Fallback: Tesseract
     try:
         from pdf2image import convert_from_path
         import pytesseract
@@ -76,7 +113,7 @@ def ocr_pdf(file_path: str) -> str:
             text = pytesseract.image_to_string(img)
             if text and text.strip():
                 text_parts.append(text)
-                logger.info(f"📷 OCR page {i+1}: {len(text)} chars")
+                logger.info(f"📷 Tesseract OCR page {i+1}: {len(text)} chars")
         
         return "\n".join(text_parts)
     except Exception as e:
@@ -184,29 +221,88 @@ async def process_multi_invoice_pdf(file_path: str, invoice_type: str = "supplie
 
 
 def extract_text_from_image(file_path: str) -> str:
-    """Extract text from image using OCR (Tesseract) with preprocessing for photos."""
+    """Extract text from image using OCR.space (primary) or Tesseract (fallback)."""
+    # Try OCR.space first (better for photos)
+    ocrspace_key = os.getenv('OCRSPACE_API_KEY')
+    if ocrspace_key:
+        try:
+            import base64
+            import httpx
+            with open(file_path, 'rb') as f:
+                file_data = f.read()
+            
+            file_ext = os.path.splitext(file_path)[1].lower()
+            content_types = {
+                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.png': 'image/png', '.gif': 'image/gif',
+                '.pdf': 'application/pdf', '.tif': 'image/tiff', '.tiff': 'image/tiff',
+                '.webp': 'image/webp',
+            }
+            content_type = content_types.get(file_ext, 'image/jpeg')
+            
+            # OCR.space free limit is 1024KB — compress if needed
+            if len(file_data) > 900 * 1024:
+                from PIL import Image
+                import io
+                img = Image.open(file_path)
+                quality = 85
+                while len(file_data) > 900 * 1024 and quality > 30:
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=quality)
+                    file_data = buf.getvalue()
+                    quality -= 10
+                content_type = 'image/jpeg'
+            
+            base64_image = f"data:{content_type};base64," + base64.b64encode(file_data).decode('utf-8')
+            
+            payload = {
+                'base64Image': base64_image,
+                'language': 'eng',
+                'isOverlayRequired': 'false',
+                'detectOrientation': 'true',
+                'scale': 'true',
+                'isTable': 'true',
+                'OCREngine': '2',
+            }
+            headers = {'apikey': ocrspace_key}
+            
+            logger.info("🔍 Trying OCR.space API (Engine 2) for image extraction...")
+            response = httpx.post('https://api.ocr.space/parse/image', data=payload, headers=headers, timeout=60.0)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('OCRExitCode') in (1, 2):
+                    extracted_text = ""
+                    for pr in result.get('ParsedResults', []):
+                        extracted_text += pr.get('ParsedText', '') + "\n"
+                    if extracted_text.strip():
+                        logger.info(f"✅ OCR.space extracted {len(extracted_text)} chars from image")
+                        return extracted_text.strip()
+                logger.warning(f"⚠️ OCR.space returned no text, falling back to Tesseract")
+            else:
+                logger.warning(f"⚠️ OCR.space HTTP {response.status_code}, falling back to Tesseract")
+        except Exception as e:
+            logger.warning(f"⚠️ OCR.space failed: {e}, falling back to Tesseract")
+    
+    # Fallback: Tesseract with preprocessing
     try:
         import pytesseract
         from PIL import Image, ImageEnhance, ImageFilter
         image = Image.open(file_path)
 
         # Preprocess for better OCR on photos
-        # Convert to grayscale
         if image.mode != 'L':
             image = image.convert('L')
-        # Upscale small images (helps with phone photos)
         width, height = image.size
         if width < 1500:
             scale = 1500 / width
             image = image.resize((int(width * scale), int(height * scale)), Image.Resampling.LANCZOS)
-        # Increase contrast
         enhancer = ImageEnhance.Contrast(image)
         image = enhancer.enhance(1.5)
-        # Sharpen
         image = image.filter(ImageFilter.SHARPEN)
 
         text = pytesseract.image_to_string(image)
-        logger.info(f"🖼️ OCR extracted {len(text)} chars from image")
+        logger.info(f"🖼️ Tesseract OCR extracted {len(text)} chars from image")
         return text
     except Exception as e:
         logger.error(f"OCR extraction error: {e}")
