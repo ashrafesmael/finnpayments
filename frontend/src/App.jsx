@@ -627,11 +627,13 @@ function InvoiceList({ onNavigate }) {
   const [endDate, setEndDate] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = {};
+      const params = { limit: pageSize, offset: (page - 1) * pageSize };
       if (filter) params.status = filter;
       if (search) params.search = search;
       if (startDate) params.start_date = startDate;
@@ -642,9 +644,10 @@ function InvoiceList({ onNavigate }) {
     }
     catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [filter, search, startDate, endDate]);
+  }, [filter, search, startDate, endDate, page]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [filter, search, startDate, endDate]);
 
   const toggleSelect = (id) => {
     const next = new Set(selected);
@@ -738,6 +741,7 @@ function InvoiceList({ onNavigate }) {
           </table>
         )}
       </div>
+      <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} />
     </div>
   );
 }
@@ -1230,17 +1234,26 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
    ═══════════════════════════════════════════════════════ */
 function JournalEntries() {
   const [entries, setEntries] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
   const { user, selectedCompany } = useAuth();
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const r = await getJournalEntries(filter ? { status: filter } : {}); setEntries(r.entries || []); }
+    try {
+      const params = { limit: pageSize, offset: (page - 1) * pageSize };
+      if (filter) params.status = filter;
+      const r = await getJournalEntries(params);
+      setEntries(r.entries || []); setTotal(r.total || r.entries?.length || 0);
+    }
     catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [filter]);
+  }, [filter, page]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [filter]);
 
   return (
     <div className="animate-fade-in space-y">
@@ -1304,6 +1317,7 @@ function JournalEntries() {
           </table>
         </div>
       ))}
+      <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} />
     </div>
   );
 }
@@ -1425,15 +1439,23 @@ function AuditLog() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const r = await getAuditLog(action ? { action } : {}); setEntries(r.entries || []); setTotal(r.total || 0); }
+    try {
+      const params = { limit: pageSize, offset: (page - 1) * pageSize };
+      if (action) params.action = action;
+      const r = await getAuditLog(params);
+      setEntries(r.entries || []); setTotal(r.total || 0);
+    }
     catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [action]);
+  }, [action, page]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [action]);
 
   const actionColors = {
     invoice_approved: 'badge-posted',
@@ -1478,6 +1500,7 @@ function AuditLog() {
           </table>
         )}
       </div>
+      <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} />
     </div>
   );
 }
@@ -1832,6 +1855,32 @@ function VendorMaster() {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function Pagination({ total, page, pageSize, onPageChange }) {
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  if (total <= pageSize) return null;
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+
+  const pages = [];
+  const maxButtons = 7;
+  let startPage = Math.max(1, page - 3);
+  let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+  if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
+
+  for (let i = startPage; i <= endPage; i++) pages.push(i);
+
+  return (
+    <div className="pagination">
+      <button className="pagination-btn" disabled={page === 1} onClick={() => onPageChange(page - 1)}>← Prev</button>
+      {startPage > 1 && <><button className="pagination-btn" onClick={() => onPageChange(1)}>1</button>{startPage > 2 && <span className="text-muted">...</span>}</>}
+      {pages.map(p => <button key={p} className={`pagination-btn ${p === page ? 'active' : ''}`} onClick={() => onPageChange(p)}>{p}</button>)}
+      {endPage < totalPages && <>{endPage < totalPages - 1 && <span className="text-muted">...</span>}<button className="pagination-btn" onClick={() => onPageChange(totalPages)}>{totalPages}</button></>}
+      <button className="pagination-btn" disabled={page === totalPages} onClick={() => onPageChange(page + 1)}>Next →</button>
+      <span className="pagination-info">Showing {start}-{end} of {total}</span>
     </div>
   );
 }
