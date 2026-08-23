@@ -9,6 +9,9 @@ import time
 import json
 import shutil
 import logging
+import hmac
+import hashlib
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -17,7 +20,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -90,6 +93,42 @@ except:
 results_store: Dict[str, Dict] = {}
 
 
+# ─── Email Action Tokens (stateless HMAC) ───────────────
+
+ACTION_TOKEN_SECRET = os.getenv('SECRET_KEY', 'finnpayments-action-secret-2026')
+ACTION_TOKEN_EXPIRY_HOURS = 72  # 3 days
+
+def generate_action_token(invoice_id: str, user_id: str, action: str) -> str:
+    """Generate a signed, time-limited token for email approve/decline actions."""
+    payload = {
+        'invoice_id': invoice_id,
+        'user_id': user_id,
+        'action': action,
+        'exp': int(time.time()) + ACTION_TOKEN_EXPIRY_HOURS * 3600,
+    }
+    payload_json = json.dumps(payload, separators=(',', ':'))
+    payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
+    signature = hmac.new(ACTION_TOKEN_SECRET.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
+    return f"{payload_b64}.{signature}"
+
+def verify_action_token(token: str) -> Optional[dict]:
+    """Verify a signed action token. Returns payload dict or None."""
+    try:
+        parts = token.rsplit('.', 1)
+        if len(parts) != 2:
+            return None
+        payload_b64, signature = parts
+        expected_sig = hmac.new(ACTION_TOKEN_SECRET.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        if time.time() > payload['exp']:
+            return None
+        return payload
+    except Exception:
+        return None
+
+
 # ─── Audit Log Helper ────────────────────────────────────
 
 def log_audit(action: str, user: dict, entity_type: str = None, entity_id: str = None,
@@ -159,6 +198,84 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
     }
+
+
+# ─── Email Action Endpoint (Approve/Decline from email) ─
+
+@app.get("/invoice-action")
+async def invoice_action(token: str):
+    """Process approve/decline action from email link. No login required.
+    Returns an HTML confirmation page."""
+    payload = verify_action_token(token)
+    if not payload:
+        return HTMLResponse(content="""
+        <!DOCTYPE html><html><head><title>finnpayments</title>
+        <style>body{font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#0b1120;color:#e2e8f0}</style></head>
+        <body><div style="text-align:center"><h1>Invalid or Expired Link</h1><p>This approval link is invalid or has expired.</p><a href="https://payments.finnverify.com" style="color:#10b981">Go to finnpayments</a></div></body></html>
+        """, status_code=400)
+
+    invoice_id = payload['invoice_id']
+    action = payload['action']  # 'approve' or 'decline'
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(Invoice.invoice_id == invoice_id).first()
+        if not invoice:
+            return HTMLResponse(content="<h1>Invoice not found</h1>", status_code=404)
+
+        if invoice.status != "pending_review":
+            return HTMLResponse(content=f"""
+            <!DOCTYPE html><html><head><title>finnpayments</title>
+            <style>body{{font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#0b1120;color:#e2e8f0}}</style></head>
+            <body><div style="text-align:center"><h1>Already Processed</h1>
+            <p>Invoice {invoice.invoice_number} has already been {invoice.status}.</p>
+            <a href="https://payments.finnverify.com" style="color:#10b981">Go to finnpayments</a></div></body></html>
+            """)
+
+        if action == "approve":
+            invoice.status = "approved"
+            invoice.approved_by = payload['user_id']
+            invoice.updated_at = datetime.utcnow()
+            db.commit()
+            log_audit("email_approved", {"id": payload['user_id'], "email": "email_action"},
+                      entity_type="invoice", entity_id=invoice_id,
+                      description=f"Invoice {invoice.invoice_number} approved via email link",
+                      company_id=invoice.company_id)
+            title = "Invoice Approved"
+            message = f"Invoice {invoice.invoice_number} from {invoice.vendor_name} has been approved successfully."
+            color = "#10b981"
+        elif action == "decline":
+            invoice.status = "rejected"
+            invoice.updated_at = datetime.utcnow()
+            db.commit()
+            log_audit("email_declined", {"id": payload['user_id'], "email": "email_action"},
+                      entity_type="invoice", entity_id=invoice_id,
+                      description=f"Invoice {invoice.invoice_number} declined via email link",
+                      company_id=invoice.company_id)
+            title = "Invoice Declined"
+            message = f"Invoice {invoice.invoice_number} from {invoice.vendor_name} has been declined."
+            color = "#ef4444"
+        else:
+            return HTMLResponse(content="<h1>Invalid action</h1>", status_code=400)
+
+    return HTMLResponse(content=f"""
+    <!DOCTYPE html><html><head><title>finnpayments - {title}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0b1120; color: #e2e8f0; }}
+        .container {{ text-align: center; max-width: 500px; padding: 40px; }}
+        h1 {{ color: {color}; margin-bottom: 16px; }}
+        .icon {{ font-size: 48px; margin-bottom: 20px; }}
+        .btn {{ display: inline-block; background: #10b981; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 20px; }}
+    </style></head>
+    <body>
+        <div class="container">
+            <div class="icon">{'✓' if action == 'approve' else '✕'}</div>
+            <h1>{title}</h1>
+            <p>{message}</p>
+            <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This action was processed automatically from your email link.</p>
+            <a href="https://payments.finnverify.com" class="btn">Go to finnpayments</a>
+        </div>
+    </body></html>
+    """)
 
 
 # ─── Invoice Upload & Processing ─────────────────────────
@@ -245,9 +362,15 @@ async def upload_invoice(
         if assigned_user_id != user['id']:
             assignee = _auth_db.get_user_by_id(assigned_user_id)
             if assignee and assignee['status'] == 'approved':
+                base_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
+                approve_token = generate_action_token(result["invoice_id"], assigned_user_id, "approve")
+                decline_token = generate_action_token(result["invoice_id"], assigned_user_id, "decline")
+                approve_url = f"{base_url}/api/invoice-action?token={approve_token}"
+                decline_url = f"{base_url}/api/invoice-action?token={decline_token}"
                 email_service.send_new_invoice_uploaded(
                     assignee['email'], assignee['full_name'], inv_num, vendor, total, cur, login_url,
-                    attachment_path=str(file_path)
+                    attachment_path=str(file_path),
+                    approve_url=approve_url, decline_url=decline_url,
                 )
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")

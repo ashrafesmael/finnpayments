@@ -464,11 +464,23 @@ class EmailService:
 
     def send_new_invoice_uploaded(self, to_email: str, full_name: str, invoice_number: str,
                                    vendor_name: str, amount: float, currency: str, login_url: str = "",
-                                   attachment_path: str = None) -> bool:
+                                   attachment_path: str = None, approve_url: str = None, decline_url: str = None) -> bool:
         """Notify approvers that a new invoice has been uploaded and needs review.
-        Optionally attaches the invoice PDF."""
-        reset_link = f'<p><a href="{login_url}" class="btn">Review Invoice</a></p>' if login_url else ''
+        Optionally attaches the invoice PDF and includes approve/decline buttons."""
         subject = f"finnpayments - New Invoice Needs Review: {invoice_number}"
+
+        # Build action buttons if URLs are provided
+        action_buttons = ""
+        if approve_url and decline_url:
+            action_buttons = f"""
+            <div style="text-align: center; margin: 28px 0;">
+                <a href="{approve_url}" style="display: inline-block; background: #10b981; color: white; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 16px; margin: 0 8px;">✓ Approve</a>
+                <a href="{decline_url}" style="display: inline-block; background: #ef4444; color: white; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 16px; margin: 0 8px;">✕ Decline</a>
+            </div>
+            <p style="color: #64748b; font-size: 12px; text-align: center; margin: 8px 0;">Or click the buttons above to approve or decline this invoice directly from this email. These links expire in 3 days.</p>
+            """
+
+        reset_link = f'<p><a href="{login_url}" class="btn">Review in finnpayments</a></p>' if login_url else ''
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -495,7 +507,9 @@ class EmailService:
                         <strong>New Invoice Uploaded &mdash; Pending Review</strong>
                         <p>Invoice <strong>{invoice_number}</strong> from <strong>{vendor_name}</strong> for <strong>{currency} {amount:,.2f}</strong> has been uploaded and needs your review.</p>
                     </div>
-                    <p>A copy of the invoice is attached to this email for your convenience. Please log in to finnpayments to review and approve it.</p>
+                    <p>A copy of the invoice is attached to this email for your convenience.</p>
+                    {action_buttons}
+                    <p style="color: #64748b; font-size: 13px;">Prefer to review the full details? Log in to finnpayments:</p>
                     {reset_link}
                     <p>Best regards,<br>finnpayments Team</p>
                 </div>
