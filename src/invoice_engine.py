@@ -582,7 +582,7 @@ Return a JSON object with these fields (use null for missing data):
     "vendor_name": "Company name on invoice",
     "vendor_brn": "Business Registration Number",
     "vendor_vat": "VAT Registration Number",
-    "invoice_number": "Invoice reference number",
+    "invoice_number": "Invoice reference number. If no clear invoice number is found, use the next best reference: purchase order number, contract number, order number, or any unique reference code. Never use common English words as invoice numbers. The value should be an alphanumeric code, not a word.",
     "invoice_date": "YYYY-MM-DD format",
     "due_date": "YYYY-MM-DD format",
     "purchase_order": "PO number if present",
@@ -640,6 +640,26 @@ Return ONLY valid JSON, no markdown formatting."""
                 for key, value in ai_data.items():
                     if value is not None and value != "" and value != []:
                         regex_result[key] = value
+
+                # Validate invoice_number — if it looks like a common word, fall back
+                inv_num = regex_result.get("invoice_number")
+                if inv_num:
+                    inv_num_str = str(inv_num).strip()
+                    # Common words the AI sometimes picks up by mistake
+                    common_words = {"when", "invoice", "date", "amount", "total", "vat",
+                                    "the", "for", "and", "from", "to", "ref", "number",
+                                    "page", "tel", "email", "address", "due", "net",
+                                    "payment", "terms", "description", "quantity", "price",
+                                    "subtotal", "tax", "balance", "please", "thank", "dear"}
+                    if inv_num_str.lower() in common_words or (inv_num_str.isalpha() and len(inv_num_str) <= 5):
+                        # Try purchase_order as fallback
+                        po = regex_result.get("purchase_order")
+                        if po and str(po).strip():
+                            regex_result["invoice_number"] = str(po).strip()
+                            logger.info(f"📝 Invoice number '{inv_num_str}' looked invalid, using PO/reference: {po}")
+                        else:
+                            regex_result["invoice_number"] = None
+                            logger.info(f"📝 Invoice number '{inv_num_str}' looked invalid, no fallback found")
                 
                 # Boost confidence if AI succeeded
                 regex_result["confidence_score"] = max(
