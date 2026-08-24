@@ -428,6 +428,7 @@ async def upload_invoice(
     project_code: Optional[str] = Form(None),
     cost_center: Optional[str] = Form(None),
     assigned_to: Optional[str] = Form(None),
+    supporting_docs: List[UploadFile] = File(default=[]),
     company: dict = Depends(get_current_company),
     user: dict = Depends(get_current_user),
 ):
@@ -459,6 +460,47 @@ async def upload_invoice(
         logger.error(f"❌ Processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
     
+    # Save supporting documents as attachments (if any were provided)
+    def _save_supporting_docs(inv_id: str):
+        if not supporting_docs:
+            return
+        ATTACHMENT_DIR.mkdir(parents=True, exist_ok=True)
+        att_dir = ATTACHMENT_DIR / inv_id
+        att_dir.mkdir(parents=True, exist_ok=True)
+        allowed_att = ('.pdf', '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')
+        with get_db() as att_db:
+            order_offset = att_db.query(InvoiceAttachment).filter(
+                InvoiceAttachment.invoice_id == inv_id
+            ).count()
+            for idx, doc in enumerate(supporting_docs):
+                if not doc.filename or not doc.filename.lower().endswith(allowed_att):
+                    continue
+                doc_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{idx}_{doc.filename}"
+                doc_path = att_dir / doc_filename
+                try:
+                    content = doc.file.read()
+                    with open(doc_path, "wb") as f:
+                        f.write(content)
+                    ext = doc_path.suffix.lower()
+                    mime_types = {
+                        '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg', '.bmp': 'image/bmp', '.tiff': 'image/tiff',
+                        '.webp': 'image/webp',
+                    }
+                    att = InvoiceAttachment(
+                        invoice_id=inv_id,
+                        file_path=str(doc_path),
+                        original_filename=doc.filename,
+                        mime_type=mime_types.get(ext, 'application/octet-stream'),
+                        file_size=len(content),
+                        uploaded_by=user['id'],
+                        sort_order=order_offset + idx,
+                    )
+                    att_db.add(att)
+                except Exception as e:
+                    logger.error(f"Failed to save supporting doc {doc.filename}: {e}")
+            att_db.commit()
+
     # Handle multi-invoice PDF (result is a list)
     if isinstance(result, list):
         logger.info(f"📋 Multi-invoice upload: {len(result)} invoices detected")
@@ -468,6 +510,7 @@ async def upload_invoice(
                 if dup:
                     r["duplicate_warning"] = dup
                 _save_invoice_to_db(r, invoice_type, str(file_path), project_code, cost_center, company['id'], uploader_user_id=assigned_to or user['id'])
+                _save_supporting_docs(r["invoice_id"])
                 results_store[r["invoice_id"]] = r
             except Exception as e:
                 logger.error(f"❌ Database save error for {r['invoice_id']}: {e}")
@@ -487,6 +530,7 @@ async def upload_invoice(
     
     try:
         _save_invoice_to_db(result, invoice_type, str(file_path), project_code, cost_center, company['id'], uploader_user_id=assigned_to or user['id'])
+        _save_supporting_docs(result["invoice_id"])
     except Exception as e:
         logger.error(f"❌ Database save error: {e}")
     
@@ -517,9 +561,13 @@ async def upload_invoice(
                 decline_token = generate_action_token(result["invoice_id"], assigned_user_id, "decline")
                 approve_url = f"{base_url}/api/invoice-action?token={approve_token}"
                 decline_url = f"{base_url}/api/invoice-action?token={decline_token}"
+                # Use combined PDF (invoice + supporting docs) if attachments exist
+                with get_db() as _ndb:
+                    _inv = _ndb.query(Invoice).filter(Invoice.invoice_id == result["invoice_id"]).first()
+                    att_bytes, att_name = _get_combined_attachment(_inv, _ndb) if _inv else (None, None)
                 email_service.send_new_invoice_uploaded(
                     assignee['email'], assignee['full_name'], inv_num, vendor, total, cur, login_url,
-                    attachment_path=str(file_path),
+                    attachment_bytes=att_bytes, attachment_name=att_name,
                     approve_url=approve_url, decline_url=decline_url,
                     company_name=company['name'],
                     smtp_config=_company_smtp_config(company),

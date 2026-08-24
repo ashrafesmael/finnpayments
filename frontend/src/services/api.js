@@ -112,13 +112,14 @@ export const getInvoicesByDateRange = (startDate, endDate, otherParams = {}) => 
 
 export const getInvoice = (invoiceId) => apiRequest(`/invoices/${invoiceId}`);
 
-export const uploadInvoice = async (file, invoiceType = 'supplier', projectCode = '', costCenter = '', assignedTo = '') => {
+export const uploadInvoice = async (file, invoiceType = 'supplier', projectCode = '', costCenter = '', assignedTo = '', supportingDocs = []) => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('invoice_type', invoiceType);
   if (projectCode) formData.append('project_code', projectCode);
   if (costCenter) formData.append('cost_center', costCenter);
   if (assignedTo) formData.append('assigned_to', assignedTo);
+  supportingDocs.forEach((doc, i) => formData.append('supporting_docs', doc));
   return apiRequest('/invoices/upload', { method: 'POST', body: formData });
 };
 

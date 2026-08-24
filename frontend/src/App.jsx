@@ -373,6 +373,7 @@ function Dashboard({ onNavigate }) {
 function InvoiceUpload({ onNavigate }) {
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState(null);
+  const [supportingDocs, setSupportingDocs] = useState([]);
   const [invoiceType, setInvoiceType] = useState('supplier');
   const [projectCode, setProjectCode] = useState('');
   const [costCenter, setCostCenter] = useState('');
@@ -383,6 +384,7 @@ function InvoiceUpload({ onNavigate }) {
   const [companyUsers, setCompanyUsers] = useState([]);
   const ref = useRef(null);
   const cameraRef = useRef(null);
+  const docsRef = useRef(null);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -394,18 +396,27 @@ function InvoiceUpload({ onNavigate }) {
       .catch(() => {});
   }, []);
 
-  const handleDrop = useCallback((e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }, []);
+  const handleDrop = useCallback((e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files[0]) setFile(e.target.files[0]); }, []);
 
   const handleUpload = async () => {
     if (!file) return;
     setUploading(true); setError(null);
-    try { setResult(await uploadInvoice(file, invoiceType, projectCode, costCenter, assignedTo)); }
+    try { setResult(await uploadInvoice(file, invoiceType, projectCode, costCenter, assignedTo, supportingDocs)); }
     catch (err) { setError(err.message); }
     finally { setUploading(false); }
   };
 
-  if (result && result.multi_invoice) return <MultiInvoiceResult result={result} onNavigate={onNavigate} onReset={() => { setResult(null); setFile(null); }} />;
-  if (result) return <UploadResult result={result} onNavigate={onNavigate} onReset={() => { setResult(null); setFile(null); }} />;
+  const handleDocsSelect = (e) => {
+    const files = Array.from(e.target.files);
+    setSupportingDocs(prev => [...prev, ...files]);
+  };
+
+  const removeDoc = (idx) => {
+    setSupportingDocs(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  if (result && result.multi_invoice) return <MultiInvoiceResult result={result} onNavigate={onNavigate} onReset={() => { setResult(null); setFile(null); setSupportingDocs([]); }} />;
+  if (result) return <UploadResult result={result} onNavigate={onNavigate} onReset={() => { setResult(null); setFile(null); setSupportingDocs([]); }} />;
 
   return (
     <div className="animate-fade-in space-y max-w-3xl">
@@ -429,6 +440,28 @@ function InvoiceUpload({ onNavigate }) {
             <div className="upload-zone-text">Drop invoice file here or click to browse</div>
             <div className="upload-zone-hint">PDF, Image, CSV, Excel supported</div>
           </>
+        )}
+      </div>
+
+      {/* Supporting documents */}
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Supporting Documents (optional)</h3>
+          <input ref={docsRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff,.webp" style={{ display: 'none' }} onChange={handleDocsSelect} />
+          <button className="btn btn-sm" onClick={() => docsRef.current?.click()}>+ Add Documents</button>
+        </div>
+        {supportingDocs.length === 0 ? (
+          <p className="text-muted text-sm" style={{ margin: 0 }}>Attach supporting documents (e.g. delivery notes, contracts) to be combined with the invoice in a single PDF for the approver.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {supportingDocs.map((doc, idx) => (
+              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', background: 'var(--bg-surface-2)', borderRadius: 4 }}>
+                <span className="text-sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name} <span className="text-muted text-xs">({(doc.size / 1024).toFixed(1)} KB)</span></span>
+                <button className="btn btn-sm" onClick={() => removeDoc(idx)} style={{ color: 'var(--red)', padding: '2px 8px' }}>×</button>
+              </div>
+            ))}
+            <p className="text-muted text-xs" style={{ margin: '4px 0 0 0' }}>{supportingDocs.length} document(s) will be merged after the invoice in the combined PDF.</p>
+          </div>
         )}
       </div>
 
