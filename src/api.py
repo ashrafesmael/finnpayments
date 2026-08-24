@@ -1233,6 +1233,38 @@ async def delete_attachment(
         return {"message": "Attachment deleted"}
 
 
+@app.get("/invoices/{invoice_id}/attachments/{attachment_id}")
+async def get_attachment_file(
+    invoice_id: str,
+    attachment_id: int,
+    company: dict = Depends(get_current_company),
+):
+    """Serve an individual supporting document file."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        att = db.query(InvoiceAttachment).filter(
+            InvoiceAttachment.id == attachment_id,
+            InvoiceAttachment.invoice_id == invoice_id
+        ).first()
+        if not att:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        if not att.file_path or not Path(att.file_path).exists():
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        return FileResponse(
+            att.file_path,
+            media_type=att.mime_type or "application/octet-stream",
+            filename=att.original_filename,
+            headers={"Content-Disposition": f'inline; filename="{att.original_filename}"'}
+        )
+
+
 @app.get("/invoices/{invoice_id}/combined-document")
 async def get_combined_document(invoice_id: str, company: dict = Depends(get_current_company)):
     """Download the combined PDF (invoice + supporting documents)."""

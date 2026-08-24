@@ -253,6 +253,10 @@ export const uploadAttachment = async (invoiceId, file) => {
   return response.json();
 };
 
+export const getAttachmentUrl = (invoiceId, attachmentId) => {
+  return `${API_BASE}/invoices/${invoiceId}/attachments/${attachmentId}`;
+};
+
 export const deleteAttachment = (invoiceId, attachmentId) =>
   apiRequest(`/invoices/${invoiceId}/attachments/${attachmentId}`, { method: 'DELETE' });
 

@@ -18,7 +18,7 @@ import {
   getInvoiceDocumentPreview,
   getCombinedDocumentUrl,
   getCombinedDocumentPreview,
-  listAttachments, uploadAttachment, deleteAttachment,
+  listAttachments, uploadAttachment, deleteAttachment, getAttachmentUrl,
   reclassifyInvoice,
   getClassificationRules, deleteClassificationRule, resetAllData
 } from './services/api.js';
@@ -1059,7 +1059,8 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
                   <td className="mono text-xs text-accent">{a.filename}</td>
                   <td className="text-muted text-xs">{fmtSize(a.file_size)}</td>
                   <td className="text-muted text-xs">{a.uploaded_at ? new Date(a.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</td>
-                  <td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <a href={getAttachmentUrl(invoiceId, a.id)} target="_blank" rel="noopener noreferrer" className="btn btn-sm" title="View">View</a>
                     {canEdit && (
                       <button className="btn btn-sm" onClick={() => handleDelete(a.id)} title="Delete" style={{ color: 'var(--red)' }}>×</button>
                     )}
