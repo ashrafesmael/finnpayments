@@ -29,3 +29,4 @@ aiofiles>=23.2.0
 mangum>=0.17.0
 slowapi>=0.1.9
 httpx>=0.24.0
+pypdf>=4.0.0

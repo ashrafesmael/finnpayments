@@ -5,6 +5,7 @@ Architecture mirrors FinnVerify's api.py.
 """
 
 import os
+import io
 import time
 import json
 import shutil
@@ -18,6 +19,7 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel as PydanticBaseModel
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Query, Depends, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
@@ -35,7 +37,7 @@ from src.database import (
     init_db, get_db, Invoice, InvoiceLineItemDB,
     JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule,
     TDSRate, SessionLocal, AuditLog, Vendor, RecurringTemplate,
-    ExchangeRate, get_exchange_rate, fetch_exchange_rates
+    ExchangeRate, get_exchange_rate, fetch_exchange_rates, InvoiceAttachment,
 )
 from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
@@ -69,6 +71,40 @@ def _company_smtp_config(company: dict) -> dict | None:
         'from_email': company.get('from_email'),
         'from_name': company.get('from_name'),
     }
+
+
+def _get_combined_attachment(invoice, db) -> tuple[bytes | None, str | None]:
+    """Return (attachment_bytes, attachment_name) for the combined PDF.
+
+    If the invoice has supporting attachments, returns the combined PDF bytes.
+    Otherwise falls back to the original source file (may be None).
+    """
+    att_count = db.query(InvoiceAttachment).filter(
+        InvoiceAttachment.invoice_id == invoice.invoice_id
+    ).count()
+
+    if att_count > 0:
+        buf = _build_combined_pdf(invoice, db)
+        if buf:
+            name = f"{invoice.invoice_number or invoice.invoice_id}_combined.pdf"
+            return buf.getvalue(), name
+
+    # Fallback: original source file
+    if invoice.source_file:
+        fp = Path(invoice.source_file)
+        if not fp.exists():
+            alt = Path("temp_uploads") / fp.name
+            if alt.exists():
+                fp = alt
+            else:
+                return None, None
+        try:
+            with open(fp, "rb") as f:
+                return f.read(), fp.name
+        except Exception:
+            return None, None
+
+    return None, None
 
 # ─── App Configuration ────────────────────────────────────
 
@@ -930,6 +966,296 @@ async def get_invoice_document_preview(invoice_id: str, page: int = Query(0, ge=
                 raise HTTPException(status_code=500, detail="pdf2image not installed")
         else:
             raise HTTPException(status_code=400, detail=f"Preview not supported for {ext} files")
+
+
+# ─── Supporting Documents (Attachments) ──────────────────
+
+ATTACHMENT_DIR = upload_directory / "attachments"
+
+
+def _image_to_pdf_bytes(file_path: str) -> bytes:
+    """Convert an image file to a 1-page PDF bytes object."""
+    from PIL import Image as PILImage
+    img = PILImage.open(file_path)
+    if img.mode == 'RGBA':
+        img = img.convert('RGB')
+    elif img.mode != 'RGB':
+        img = img.convert('RGB')
+    buf = io.BytesIO()
+    img.save(buf, format='PDF', resolution=150.0)
+    return buf.getvalue()
+
+
+def _build_combined_pdf(invoice, db) -> io.BytesIO | None:
+    """Build a combined PDF (invoice source + all supporting docs) as BytesIO.
+
+    Returns None if the invoice has no source file.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+
+    # Page 1+: Invoice source file
+    source_path = None
+    if invoice.source_file:
+        fp = Path(invoice.source_file)
+        if fp.exists():
+            source_path = str(fp)
+        else:
+            alt = Path("temp_uploads") / fp.name
+            if alt.exists():
+                source_path = str(alt)
+
+    if source_path:
+        ext = Path(source_path).suffix.lower()
+        if ext == '.pdf':
+            reader = PdfReader(source_path)
+            for page in reader.pages:
+                writer.add_page(page)
+        elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'):
+            pdf_bytes = _image_to_pdf_bytes(source_path)
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                writer.add_page(page)
+
+    # Supporting documents in sort_order
+    attachments = db.query(InvoiceAttachment).filter(
+        InvoiceAttachment.invoice_id == invoice.invoice_id
+    ).order_by(InvoiceAttachment.sort_order, InvoiceAttachment.id).all()
+
+    for att in attachments:
+        if not att.file_path or not Path(att.file_path).exists():
+            continue
+        ext = Path(att.file_path).suffix.lower()
+        try:
+            if ext == '.pdf':
+                reader = PdfReader(att.file_path)
+                for page in reader.pages:
+                    writer.add_page(page)
+            elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'):
+                pdf_bytes = _image_to_pdf_bytes(att.file_path)
+                reader = PdfReader(io.BytesIO(pdf_bytes))
+                for page in reader.pages:
+                    writer.add_page(page)
+        except Exception as e:
+            logger.error(f"Failed to add attachment {att.id} to combined PDF: {e}")
+
+    if len(writer.pages) == 0:
+        return None
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    buf.seek(0)
+    return buf
+
+
+@app.get("/invoices/{invoice_id}/attachments")
+async def list_attachments(invoice_id: str, company: dict = Depends(get_current_company)):
+    """List supporting documents for an invoice."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        attachments = db.query(InvoiceAttachment).filter(
+            InvoiceAttachment.invoice_id == invoice_id
+        ).order_by(InvoiceAttachment.sort_order, InvoiceAttachment.id).all()
+
+        return [{
+            "id": a.id,
+            "filename": a.original_filename,
+            "mime_type": a.mime_type,
+            "file_size": a.file_size,
+            "uploaded_by": a.uploaded_by,
+            "uploaded_at": a.uploaded_at.isoformat() if a.uploaded_at else None,
+            "sort_order": a.sort_order,
+        } for a in attachments]
+
+
+@app.post("/invoices/{invoice_id}/attachments")
+async def upload_attachment(
+    invoice_id: str,
+    file: UploadFile = File(...),
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Upload a supporting document for an invoice."""
+    allowed_ext = ('.pdf', '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')
+    if not file.filename.lower().endswith(allowed_ext):
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(allowed_ext)}")
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        if invoice.status in ('approved', 'rejected', 'posted'):
+            raise HTTPException(status_code=400, detail="Cannot add attachments to a processed invoice")
+
+        # Save file
+        ATTACHMENT_DIR.mkdir(parents=True, exist_ok=True)
+        att_dir = ATTACHMENT_DIR / invoice_id
+        att_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
+        file_path = att_dir / filename
+
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # Determine sort order (append to end)
+        max_order = db.query(InvoiceAttachment).filter(
+            InvoiceAttachment.invoice_id == invoice_id
+        ).count()
+
+        ext = file_path.suffix.lower()
+        mime_types = {
+            '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg', '.bmp': 'image/bmp', '.tiff': 'image/tiff',
+            '.webp': 'image/webp',
+        }
+
+        att = InvoiceAttachment(
+            invoice_id=invoice_id,
+            file_path=str(file_path),
+            original_filename=file.filename,
+            mime_type=mime_types.get(ext, 'application/octet-stream'),
+            file_size=len(content),
+            uploaded_by=user['id'],
+            sort_order=max_order,
+        )
+        db.add(att)
+        db.commit()
+        db.refresh(att)
+
+        log_audit("upload_attachment", user, entity_type="invoice", entity_id=invoice_id,
+                  description=f"Supporting document '{file.filename}' uploaded for invoice {invoice.invoice_number}",
+                  company_id=company['id'])
+
+        return {
+            "id": att.id,
+            "filename": att.original_filename,
+            "mime_type": att.mime_type,
+            "file_size": att.file_size,
+            "message": "Attachment uploaded successfully",
+        }
+
+
+@app.delete("/invoices/{invoice_id}/attachments/{attachment_id}")
+async def delete_attachment(
+    invoice_id: str,
+    attachment_id: int,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Delete a supporting document."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        if invoice.status in ('approved', 'rejected', 'posted'):
+            raise HTTPException(status_code=400, detail="Cannot remove attachments from a processed invoice")
+
+        att = db.query(InvoiceAttachment).filter(
+            InvoiceAttachment.id == attachment_id,
+            InvoiceAttachment.invoice_id == invoice_id
+        ).first()
+        if not att:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        # Delete file from disk
+        if att.file_path and Path(att.file_path).exists():
+            Path(att.file_path).unlink()
+
+        db.delete(att)
+        db.commit()
+
+        log_audit("delete_attachment", user, entity_type="invoice", entity_id=invoice_id,
+                  description=f"Supporting document '{att.original_filename}' deleted from invoice {invoice.invoice_number}",
+                  company_id=company['id'])
+
+        return {"message": "Attachment deleted"}
+
+
+@app.get("/invoices/{invoice_id}/combined-document")
+async def get_combined_document(invoice_id: str, company: dict = Depends(get_current_company)):
+    """Download the combined PDF (invoice + supporting documents)."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        buf = _build_combined_pdf(invoice, db)
+        if not buf:
+            raise HTTPException(status_code=404, detail="No documents available")
+
+        return StreamingResponse(
+            buf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{invoice.invoice_number or invoice_id}_combined.pdf"'}
+        )
+
+
+@app.get("/invoices/{invoice_id}/combined-document/preview")
+async def get_combined_document_preview(
+    invoice_id: str,
+    page: int = Query(0, ge=0),
+    company: dict = Depends(get_current_company),
+):
+    """Preview a page from the combined PDF as base64 image."""
+    import base64
+
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        buf = _build_combined_pdf(invoice, db)
+        if not buf:
+            raise HTTPException(status_code=404, detail="No documents available")
+
+        try:
+            from pdf2image import convert_from_bytes
+            from pdf2image.pdf2image import pdfinfo_from_bytes
+
+            info = pdfinfo_from_bytes(buf.getvalue())
+            total_pages = info.get("Pages", 1)
+            page = min(page, total_pages - 1)
+
+            images = convert_from_bytes(
+                buf.getvalue(),
+                first_page=page + 1,
+                last_page=page + 1,
+                dpi=150,
+                fmt="png"
+            )
+
+            if images:
+                img_buf = io.BytesIO()
+                images[0].save(img_buf, format="PNG")
+                img_data = base64.b64encode(img_buf.getvalue()).decode()
+                return {
+                    "total_pages": total_pages,
+                    "current_page": page,
+                    "mime_type": "image/png",
+                    "image": img_data,
+                }
+            else:
+                raise HTTPException(status_code=500, detail="Failed to render page")
+        except ImportError:
+            raise HTTPException(status_code=500, detail="pdf2image not installed")
 
 
 
@@ -2029,12 +2355,15 @@ async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict 
                 decline_token = generate_action_token(invoice.invoice_id, assignee['id'], "decline")
                 approve_url = f"{base_url}/api/invoice-action?token={approve_token}"
                 decline_url = f"{base_url}/api/invoice-action?token={decline_token}"
-                doc_path = invoice.source_file if invoice.source_file and os.path.exists(invoice.source_file) else None
+                # Use combined PDF (invoice + supporting docs) if attachments exist
+                with get_db() as _db:
+                    _inv = _db.query(Invoice).filter(Invoice.invoice_id == invoice.invoice_id).first()
+                    att_bytes, att_name = _get_combined_attachment(_inv, _db) if _inv else (None, None)
                 email_service.send_new_invoice_uploaded(
                     assignee['email'], assignee['full_name'],
                     invoice.invoice_number, invoice.vendor_name,
                     invoice.total_amount or 0, invoice.currency,
-                    login_url, attachment_path=doc_path,
+                    login_url, attachment_bytes=att_bytes, attachment_name=att_name,
                     approve_url=approve_url, decline_url=decline_url,
                     company_name=company['name'],
                     smtp_config=_company_smtp_config(company),

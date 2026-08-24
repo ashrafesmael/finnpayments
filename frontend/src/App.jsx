@@ -16,6 +16,9 @@ import {
   getExchangeRates, updateExchangeRate, refreshExchangeRates, settlePayment,
   getInvoiceDocumentUrl,
   getInvoiceDocumentPreview,
+  getCombinedDocumentUrl,
+  getCombinedDocumentPreview,
+  listAttachments, uploadAttachment, deleteAttachment,
   reclassifyInvoice,
   getClassificationRules, deleteClassificationRule, resetAllData
 } from './services/api.js';
@@ -866,7 +869,7 @@ function DocumentPreview({ invoiceId }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await getInvoiceDocumentPreview(invoiceId, p);
+      const data = await getCombinedDocumentPreview(invoiceId, p);
       setPreview(data);
       setPage(data.current_page);
     } catch (e) {
@@ -881,7 +884,7 @@ function DocumentPreview({ invoiceId }) {
   return (
     <div className="card">
       <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h3>Source Document</h3>
+        <h3>Document Preview</h3>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {preview && preview.total_pages > 1 && (
             <>
@@ -890,7 +893,7 @@ function DocumentPreview({ invoiceId }) {
               <button className="btn btn-sm" disabled={page >= preview.total_pages - 1} onClick={() => loadPage(page + 1)}>Next →</button>
             </>
           )}
-          <a href={getInvoiceDocumentUrl(invoiceId)} download className="btn btn-sm">Download</a>
+          <a href={getCombinedDocumentUrl(invoiceId)} download className="btn btn-sm">Download</a>
         </div>
       </div>
       <div style={{ padding: 16, background: '#f5f5f0', minHeight: 200, display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '0 0 8px 8px' }}>
@@ -899,9 +902,121 @@ function DocumentPreview({ invoiceId }) {
         {!loading && !error && preview && (
           <img
             src={`data:${preview.mime_type};base64,${preview.image}`}
-            alt={`Invoice page ${page + 1}`}
+            alt={`Document page ${page + 1}`}
             style={{ maxWidth: '100%', maxHeight: 800, boxShadow: '0 2px 12px rgba(0,0,0,0.15)', borderRadius: 4 }}
           />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
+  const [attachments, setAttachments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const fileRef = useRef(null);
+  const canEdit = invoice && !['approved', 'rejected', 'posted'].includes(invoice.status);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await listAttachments(invoiceId);
+      setAttachments(data);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [invoiceId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    try {
+      await uploadAttachment(invoiceId, file);
+      await load();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const handleDelete = async (attId) => {
+    try {
+      await deleteAttachment(invoiceId, attId);
+      await load();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const fmtSize = (bytes) => {
+    if (!bytes) return '-';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  return (
+    <div className="card">
+      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3>Supporting Documents ({attachments.length})</h3>
+        {canEdit && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff,.webp"
+              onChange={handleUpload}
+              style={{ display: 'none' }}
+              id="att-upload"
+            />
+            <label htmlFor="att-upload" className="btn btn-sm btn-primary" style={{ cursor: 'pointer' }}>
+              {uploading ? 'Uploading...' : '+ Add Document'}
+            </label>
+          </div>
+        )}
+      </div>
+      {error && <div style={{ padding: 8, color: 'var(--red)' }}>{error}</div>}
+      <div style={{ padding: 16 }}>
+        {loading ? (
+          <span className="text-muted">Loading...</span>
+        ) : attachments.length === 0 ? (
+          <span className="text-muted text-sm">No supporting documents uploaded</span>
+        ) : (
+          <table className="data-table" style={{ fontSize: 13 }}>
+            <thead>
+              <tr><th>Filename</th><th>Size</th><th>Uploaded</th><th></th></tr>
+            </thead>
+            <tbody>
+              {attachments.map(a => (
+                <tr key={a.id}>
+                  <td className="mono text-xs text-accent">{a.filename}</td>
+                  <td className="text-muted text-xs">{fmtSize(a.file_size)}</td>
+                  <td className="text-muted text-xs">{a.uploaded_at ? new Date(a.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</td>
+                  <td>
+                    {canEdit && (
+                      <button className="btn btn-sm" onClick={() => handleDelete(a.id)} title="Delete" style={{ color: 'var(--red)' }}>×</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {attachments.length > 0 && (
+          <p className="text-muted text-xs" style={{ marginTop: 8 }}>
+            These documents are merged with the invoice into a single PDF for review and email notifications.
+          </p>
         )}
       </div>
     </div>
@@ -1136,6 +1251,8 @@ function InvoiceDetail({ invoiceId, onNavigate }) {
       )}
 
       {inv.has_document && <DocumentPreview invoiceId={invoiceId} />}
+
+      <SupportingDocuments invoiceId={invoiceId} invoice={inv} onRefresh={() => getInvoice(invoiceId).then(setInv)} />
 
       <ReclassifyBanner
         invoiceId={invoiceId}

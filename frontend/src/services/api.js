@@ -220,6 +220,41 @@ export const getInvoiceDocumentPreview = async (invoiceId, page = 0) => {
   return response.json();
 };
 
+// ─── Combined Document (invoice + supporting docs) ───────
+export const getCombinedDocumentUrl = (invoiceId) => {
+  return `${API_BASE}/invoices/${invoiceId}/combined-document`;
+};
+
+export const getCombinedDocumentPreview = async (invoiceId, page = 0) => {
+  const response = await fetch(`${API_BASE}/invoices/${invoiceId}/combined-document/preview?page=${page}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Combined preview not available');
+  return response.json();
+};
+
+// ─── Supporting Documents (Attachments) ──────────────────
+export const listAttachments = (invoiceId) =>
+  apiRequest(`/invoices/${invoiceId}/attachments`);
+
+export const uploadAttachment = async (invoiceId, file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch(`${API_BASE}/invoices/${invoiceId}/attachments`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+    body: formData,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || 'Upload failed');
+  }
+  return response.json();
+};
+
+export const deleteAttachment = (invoiceId, attachmentId) =>
+  apiRequest(`/invoices/${invoiceId}/attachments/${attachmentId}`, { method: 'DELETE' });
+
 // ─── Reclassify ─────────────────────────────────────────
 export const reclassifyInvoice = async (invoiceId, userContext) => {
   const response = await fetch(`${API_BASE}/invoices/${invoiceId}/reclassify`, {

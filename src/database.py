@@ -284,6 +284,20 @@ class AuditLog(Base):
     ip_address = Column(String(45))
 
 
+class InvoiceAttachment(Base):
+    __tablename__ = "invoice_attachments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_id = Column(String(50), ForeignKey("invoices.invoice_id"), nullable=False, index=True)
+    file_path = Column(String(500), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    mime_type = Column(String(100))
+    file_size = Column(Integer)
+    uploaded_by = Column(String(50))
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    sort_order = Column(Integer, default=0)
+
+
 def init_db():
     """Create all tables, run migrations, and seed chart of accounts"""
     Base.metadata.create_all(bind=engine)
