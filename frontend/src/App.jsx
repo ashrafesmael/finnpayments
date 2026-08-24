@@ -398,8 +398,15 @@ function InvoiceUpload({ onNavigate }) {
 
   const handleDrop = useCallback((e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files[0]) setFile(e.target.files[0]); }, []);
 
+  const [showConfirm, setShowConfirm] = useState(false);
+
   const handleUpload = async () => {
     if (!file) return;
+    if (!assignedTo && !showConfirm) {
+      setShowConfirm(true);
+      return;
+    }
+    setShowConfirm(false);
     setUploading(true); setError(null);
     try { setResult(await uploadInvoice(file, invoiceType, projectCode, costCenter, assignedTo, supportingDocs)); }
     catch (err) { setError(err.message); }
@@ -498,7 +505,7 @@ function InvoiceUpload({ onNavigate }) {
       <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
         <div>
           <label className="input-label">Assign To (for approval)</label>
-          <select className="input" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+          <select className="input" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} data-assign-select>
             <option value="">Myself (default)</option>
             {companyUsers.filter(u => u.id !== user?.id).map(u => (
               <option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>
@@ -512,6 +519,22 @@ function InvoiceUpload({ onNavigate }) {
       <button className="btn btn-primary" onClick={handleUpload} disabled={!file || uploading}>
         {uploading ? 'Processing...' : 'Process Invoice'}
       </button>
+
+      {showConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }} onClick={() => setShowConfirm(false)}>
+          <div className="card" style={{ maxWidth: 420, padding: 24 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginBottom: 12 }}>No assignee selected</h3>
+            <p className="text-sm" style={{ marginBottom: 16, lineHeight: 1.5 }}>
+              You haven't assigned this invoice to anyone for approval. It will be assigned to you and <strong>no notification email will be sent</strong>.
+            </p>
+            <p className="text-sm text-muted" style={{ marginBottom: 16 }}>Would you like to assign it to someone else, or proceed?</p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => { setShowConfirm(false); document.querySelector('[data-assign-select]')?.focus(); }}>Select Assignee</button>
+              <button className="btn btn-primary" onClick={handleUpload}>Proceed (assign to me)</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
