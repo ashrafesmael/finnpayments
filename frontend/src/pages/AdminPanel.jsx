@@ -44,7 +44,7 @@ const AdminPanel = () => {
     } catch (err) {
       setError('Error fetching users: ' + err.message);
     } finally {
-      setActionLoading(null);
+      setLoading(false);
     }
   };
 
