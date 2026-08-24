@@ -1015,6 +1015,24 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
     }
   };
 
+  const handleView = async (att) => {
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || '';
+      const token = localStorage.getItem('auth_token');
+      const company = JSON.parse(localStorage.getItem('fp_company') || 'null');
+      const headers = { 'Authorization': `Bearer ${token}` };
+      if (company) headers['X-Company-Id'] = company.id;
+      const resp = await fetch(`${API_URL}/invoices/${invoiceId}/attachments/${att.id}`, { headers });
+      if (!resp.ok) throw new Error('Failed to load document');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const fmtSize = (bytes) => {
     if (!bytes) return '-';
     if (bytes < 1024) return bytes + ' B';
@@ -1060,7 +1078,7 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
                   <td className="text-muted text-xs">{fmtSize(a.file_size)}</td>
                   <td className="text-muted text-xs">{a.uploaded_at ? new Date(a.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</td>
                   <td style={{ display: 'flex', gap: 4 }}>
-                    <a href={getAttachmentUrl(invoiceId, a.id)} target="_blank" rel="noopener noreferrer" className="btn btn-sm" title="View">View</a>
+                    <button className="btn btn-sm" onClick={() => handleView(a)} title="View">View</button>
                     {canEdit && (
                       <button className="btn btn-sm" onClick={() => handleDelete(a.id)} title="Delete" style={{ color: 'var(--red)' }}>×</button>
                     )}
