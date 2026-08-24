@@ -1028,7 +1028,8 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
       const resp = await fetch(`${API_URL}/invoices/${invoiceId}/attachments/${att.id}`, { headers });
       if (!resp.ok) throw new Error('Failed to load document');
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
+      const typedBlob = new Blob([blob], { type: att.mime_type || 'application/pdf' });
+      const url = URL.createObjectURL(typedBlob);
       setViewUrl(url);
       setViewingAtt(att);
     } catch (err) {
@@ -1117,9 +1118,7 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
             {viewingAtt.mime_type && viewingAtt.mime_type.startsWith('image/') ? (
               <img src={viewUrl} alt={viewingAtt.filename} style={{ maxWidth: '100%', maxHeight: '85vh', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }} />
             ) : (
-              <object data={viewUrl} type="application/pdf" style={{ width: '100%', maxWidth: 900, height: '85vh' }}>
-                <p style={{ color: '#fff' }}>Unable to display PDF in browser.</p>
-              </object>
+              <iframe src={viewUrl} title={viewingAtt.filename} style={{ width: '100%', maxWidth: 900, height: '85vh', border: 'none', borderRadius: 4, boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }} />
             )}
           </div>
         </div>
