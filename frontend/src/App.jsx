@@ -18,7 +18,7 @@ import {
   getInvoiceDocumentPreview,
   getCombinedDocumentUrl,
   getCombinedDocumentPreview,
-  listAttachments, uploadAttachment, deleteAttachment, getAttachmentUrl,
+  listAttachments, uploadAttachment, deleteAttachment, getAttachmentUrl, getAttachmentPreview,
   reclassifyInvoice,
   getClassificationRules, deleteClassificationRule, resetAllData
 } from './services/api.js';
@@ -1016,31 +1016,34 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
   };
 
   const [viewingAtt, setViewingAtt] = useState(null);
-  const [viewUrl, setViewUrl] = useState(null);
+  const [viewPage, setViewPage] = useState(0);
+  const [viewPreview, setViewPreview] = useState(null);
+  const [viewLoading, setViewLoading] = useState(false);
 
-  const handleView = async (att) => {
+  const loadViewPage = async (att, p) => {
+    setViewLoading(true);
     try {
-      const API_URL = import.meta.env.VITE_API_URL || '';
-      const token = localStorage.getItem('auth_token');
-      const company = JSON.parse(localStorage.getItem('fp_company') || 'null');
-      const headers = { 'Authorization': `Bearer ${token}` };
-      if (company) headers['X-Company-Id'] = company.id;
-      const resp = await fetch(`${API_URL}/invoices/${invoiceId}/attachments/${att.id}`, { headers });
-      if (!resp.ok) throw new Error('Failed to load document');
-      const blob = await resp.blob();
-      const typedBlob = new Blob([blob], { type: att.mime_type || 'application/pdf' });
-      const url = URL.createObjectURL(typedBlob);
-      setViewUrl(url);
-      setViewingAtt(att);
+      const data = await getAttachmentPreview(invoiceId, att.id, p);
+      setViewPreview(data);
+      setViewPage(data.current_page);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setViewLoading(false);
     }
   };
 
+  const handleView = (att) => {
+    setViewingAtt(att);
+    setViewPreview(null);
+    setViewPage(0);
+    loadViewPage(att, 0);
+  };
+
   const closeViewer = () => {
-    if (viewUrl) URL.revokeObjectURL(viewUrl);
-    setViewUrl(null);
     setViewingAtt(null);
+    setViewPreview(null);
+    setViewPage(0);
   };
 
   const fmtSize = (bytes) => {
@@ -1105,21 +1108,30 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
         )}
       </div>
 
-      {viewingAtt && viewUrl && (
+      {viewingAtt && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 2000, display: 'flex', flexDirection: 'column' }}
           onClick={closeViewer}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', color: '#fff' }} onClick={(e) => e.stopPropagation()}>
             <span style={{ fontSize: 14, fontWeight: 500 }}>{viewingAtt.filename}</span>
-            <button className="btn btn-sm" onClick={closeViewer} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>✕ Close</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {viewPreview && viewPreview.total_pages > 1 && (
+                <>
+                  <button className="btn btn-sm" disabled={viewPage <= 0} onClick={() => loadViewPage(viewingAtt, viewPage - 1)} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>←</button>
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>{viewPage + 1} / {viewPreview.total_pages}</span>
+                  <button className="btn btn-sm" disabled={viewPage >= viewPreview.total_pages - 1} onClick={() => loadViewPage(viewingAtt, viewPage + 1)} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>→</button>
+                </>
+              )}
+              <button className="btn btn-sm" onClick={closeViewer} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>✕ Close</button>
+            </div>
           </div>
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'auto', padding: 16 }} onClick={(e) => e.stopPropagation()}>
-            {viewingAtt.mime_type && viewingAtt.mime_type.startsWith('image/') ? (
-              <img src={viewUrl} alt={viewingAtt.filename} style={{ maxWidth: '100%', maxHeight: '85vh', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }} />
-            ) : (
-              <iframe src={viewUrl} title={viewingAtt.filename} style={{ width: '100%', maxWidth: 900, height: '85vh', border: 'none', borderRadius: 4, boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }} />
-            )}
+            {viewLoading ? (
+              <span style={{ color: '#fff' }}>Loading...</span>
+            ) : viewPreview ? (
+              <img src={`data:${viewPreview.mime_type};base64,${viewPreview.image}`} alt={viewingAtt.filename} style={{ maxWidth: '100%', maxHeight: '85vh', boxShadow: '0 4px 24px rgba(0,0,0,0.4)', borderRadius: 4 }} />
+            ) : null}
           </div>
         </div>
       )}

@@ -257,6 +257,14 @@ export const getAttachmentUrl = (invoiceId, attachmentId) => {
   return `${API_BASE}/invoices/${invoiceId}/attachments/${attachmentId}`;
 };
 
+export const getAttachmentPreview = async (invoiceId, attachmentId, page = 0) => {
+  const response = await fetch(`${API_BASE}/invoices/${invoiceId}/attachments/${attachmentId}/preview?page=${page}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Preview not available');
+  return response.json();
+};
+
 export const deleteAttachment = (invoiceId, attachmentId) =>
   apiRequest(`/invoices/${invoiceId}/attachments/${attachmentId}`, { method: 'DELETE' });
 

@@ -1265,6 +1265,64 @@ async def get_attachment_file(
         )
 
 
+@app.get("/invoices/{invoice_id}/attachments/{attachment_id}/preview")
+async def get_attachment_preview(
+    invoice_id: str,
+    attachment_id: int,
+    page: int = Query(0, ge=0),
+    company: dict = Depends(get_current_company),
+):
+    """Preview an attachment page as base64 image (PDF pages or image)."""
+    with get_db() as db:
+        invoice = db.query(Invoice).filter(
+            Invoice.invoice_id == invoice_id, Invoice.company_id == company['id']
+        ).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        att = db.query(InvoiceAttachment).filter(
+            InvoiceAttachment.id == attachment_id,
+            InvoiceAttachment.invoice_id == invoice_id
+        ).first()
+        if not att:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        if not att.file_path or not Path(att.file_path).exists():
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        ext = Path(att.file_path).suffix.lower()
+
+        if ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"):
+            with open(att.file_path, "rb") as f:
+                img_data = base64.b64encode(f.read()).decode()
+            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "bmp": "image/bmp", "webp": "image/webp", "tiff": "image/tiff"}
+            return {
+                "total_pages": 1,
+                "current_page": 0,
+                "mime_type": mime.get(ext.lstrip("."), "image/png"),
+                "image": img_data,
+            }
+        elif ext == ".pdf":
+            try:
+                from pdf2image import convert_from_path
+                from pdf2image.pdf2image import pdfinfo_from_path
+                info = pdfinfo_from_path(att.file_path)
+                total_pages = info.get("Pages", 1)
+                page = min(page, total_pages - 1)
+                images = convert_from_path(att.file_path, first_page=page + 1, last_page=page + 1, dpi=150, fmt="png")
+                if images:
+                    buf = io.BytesIO()
+                    images[0].save(buf, format="PNG")
+                    img_data = base64.b64encode(buf.getvalue()).decode()
+                    return {"total_pages": total_pages, "current_page": page, "mime_type": "image/png", "image": img_data}
+                raise HTTPException(status_code=500, detail="Failed to render page")
+            except ImportError:
+                raise HTTPException(status_code=500, detail="pdf2image not installed")
+        else:
+            raise HTTPException(status_code=400, detail=f"Preview not supported for {ext} files")
+
+
 @app.get("/invoices/{invoice_id}/combined-document")
 async def get_combined_document(invoice_id: str, company: dict = Depends(get_current_company)):
     """Download the combined PDF (invoice + supporting documents)."""
