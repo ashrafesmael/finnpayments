@@ -52,6 +52,24 @@ from src.docuseal_integration import (
 
 logger = logging.getLogger("FinnPayments.API")
 
+
+def _company_smtp_config(company: dict) -> dict | None:
+    """Build an smtp_config dict from a company record for per-company sending.
+
+    Returns None when the company has no SMTP host configured, causing the
+    email service to fall back to the global default (Graph/SMTP via env).
+    """
+    if not company or not company.get('smtp_host') or not company.get('from_email'):
+        return None
+    return {
+        'smtp_host': company.get('smtp_host'),
+        'smtp_port': company.get('smtp_port'),
+        'smtp_user': company.get('smtp_user'),
+        'smtp_password': company.get('smtp_password'),
+        'from_email': company.get('from_email'),
+        'from_name': company.get('from_name'),
+    }
+
 # ─── App Configuration ────────────────────────────────────
 
 app = FastAPI(
@@ -468,6 +486,7 @@ async def upload_invoice(
                     attachment_path=str(file_path),
                     approve_url=approve_url, decline_url=decline_url,
                     company_name=company['name'],
+                    smtp_config=_company_smtp_config(company),
                 )
     except Exception as e:
         logger.error(f"Failed to send upload notification: {e}")
@@ -756,6 +775,7 @@ async def update_invoice_status(
         # ── Send targeted workflow notifications ──
         login_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
         from src.auth_models import auth_db as _auth_db
+        _smtp_cfg = _company_smtp_config(company)
 
         def notify_user(user_id, send_func):
             """Send notification to a specific user."""
@@ -769,7 +789,7 @@ async def update_invoice_status(
             send_func(notifee['email'], notifee['full_name'],
                       invoice.invoice_number, invoice.vendor_name,
                       invoice.total_amount, invoice.currency, login_url,
-                      company_name=company['name'])
+                      company_name=company['name'], smtp_config=_smtp_cfg)
 
         if status == "approved":
             # Notify the assigned user that the invoice is ready for posting
@@ -778,7 +798,8 @@ async def update_invoice_status(
         elif status == "rejected":
             # Notify the user who uploaded it (if different from rejector)
             notify_user(invoice.assigned_to, lambda e, n, inv, ven, amt, cur, url=None, **kw:
-                email_service.send_invoice_rejected(e, n, inv, ven, amt, cur, company_name=kw.get('company_name')))
+                email_service.send_invoice_rejected(e, n, inv, ven, amt, cur,
+                    company_name=kw.get('company_name'), smtp_config=kw.get('smtp_config')))
 
         elif status == "posted":
             # Notify the assigned user that the invoice is posted and ready for payment
@@ -2016,6 +2037,7 @@ async def assign_invoice(invoice_id: str, request: AssignRequest, company: dict 
                     login_url, attachment_path=doc_path,
                     approve_url=approve_url, decline_url=decline_url,
                     company_name=company['name'],
+                    smtp_config=_company_smtp_config(company),
                 )
                 logger.info(f"📧 Assignment notification sent to {assignee['email']}")
             except Exception as e:

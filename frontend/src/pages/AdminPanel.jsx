@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   getCompanies, createCompany, deleteCompany,
   getCompanyUsers, assignUserToCompany, removeUserFromCompany,
-  toggleMakerChecker,
+  toggleMakerChecker, getCompanySmtp, updateCompanySmtp,
 } from '../services/api';
 import './AdminPanel.css';
 
@@ -107,6 +107,67 @@ const AdminPanel = () => {
     } catch (err) {
       setError(err.message);
       await fetchCompanies();
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // ── Per-company SMTP settings ──
+  const [smtpForm, setSmtpForm] = useState({});
+  const [smtpLoaded, setSmtpLoaded] = useState({});
+
+  const loadSmtp = async (companyId) => {
+    try {
+      const data = await getCompanySmtp(companyId);
+      setSmtpForm(prev => ({ ...prev, [companyId]: {
+        smtp_host: data.smtp_host || '',
+        smtp_port: data.smtp_port || 587,
+        smtp_user: data.smtp_user || '',
+        smtp_password: '',
+        from_email: data.from_email || '',
+        from_name: data.from_name || '',
+        _configured: data.smtp_configured,
+        _hasPassword: !!data.smtp_password,
+      }}));
+      setSmtpLoaded(prev => ({ ...prev, [companyId]: true }));
+    } catch (err) {
+      setError('Failed to load SMTP settings: ' + err.message);
+    }
+  };
+
+  const handleSaveSmtp = async (companyId) => {
+    setActionLoading('smtp-' + companyId);
+    try {
+      const form = smtpForm[companyId];
+      const payload = {
+        smtp_host: form.smtp_host || null,
+        smtp_port: parseInt(form.smtp_port) || null,
+        smtp_user: form.smtp_user || null,
+        smtp_password: form.smtp_password || null,
+        from_email: form.from_email || null,
+        from_name: form.from_name || null,
+      };
+      await updateCompanySmtp(companyId, payload);
+      await loadSmtp(companyId);
+      setError('');
+    } catch (err) {
+      setError('Failed to save SMTP settings: ' + err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleClearSmtp = async (companyId) => {
+    setActionLoading('smtp-clear-' + companyId);
+    try {
+      await updateCompanySmtp(companyId, {
+        smtp_host: null, smtp_port: null, smtp_user: null,
+        smtp_password: null, from_email: null, from_name: null,
+      });
+      await loadSmtp(companyId);
+      setError('');
+    } catch (err) {
+      setError('Failed to clear SMTP settings: ' + err.message);
     } finally {
       setActionLoading(null);
     }
@@ -235,6 +296,9 @@ const AdminPanel = () => {
       setExpandedCompany(companyId);
       if (!companyUsers[companyId]) {
         fetchCompanyUsers(companyId);
+      }
+      if (!smtpLoaded[companyId]) {
+        loadSmtp(companyId);
       }
     }
   };
@@ -391,6 +455,81 @@ const AdminPanel = () => {
                         >
                           {actionLoading === 'assign-' + c.id ? 'Assigning...' : 'Assign User'}
                         </button>
+                      </div>
+
+                      {/* ── SMTP / Notification Sender Settings ── */}
+                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                        <div style={{ marginBottom: 8, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          Notification Sender (SMTP)
+                          {smtpForm[c.id]?._configured && (
+                            <span className="badge badge-posted" style={{ fontSize: 10 }}>Configured</span>
+                          )}
+                          {!smtpForm[c.id]?._configured && (
+                            <span className="text-muted text-xs">— using system default</span>
+                          )}
+                        </div>
+                        {smtpForm[c.id] ? (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                            <input
+                              className="input"
+                              placeholder="SMTP Host (e.g. smtp.gmail.com)"
+                              value={smtpForm[c.id].smtp_host}
+                              onChange={(e) => setSmtpForm(prev => ({ ...prev, [c.id]: { ...prev[c.id], smtp_host: e.target.value } }))}
+                            />
+                            <input
+                              className="input"
+                              type="number"
+                              placeholder="Port (587)"
+                              value={smtpForm[c.id].smtp_port}
+                              onChange={(e) => setSmtpForm(prev => ({ ...prev, [c.id]: { ...prev[c.id], smtp_port: e.target.value } }))}
+                            />
+                            <input
+                              className="input"
+                              placeholder="SMTP Username"
+                              value={smtpForm[c.id].smtp_user}
+                              onChange={(e) => setSmtpForm(prev => ({ ...prev, [c.id]: { ...prev[c.id], smtp_user: e.target.value } }))}
+                            />
+                            <input
+                              className="input"
+                              type="password"
+                              placeholder={smtpForm[c.id]._hasPassword ? '••••• (enter new to change)' : 'SMTP Password'}
+                              value={smtpForm[c.id].smtp_password}
+                              onChange={(e) => setSmtpForm(prev => ({ ...prev, [c.id]: { ...prev[c.id], smtp_password: e.target.value } }))}
+                            />
+                            <input
+                              className="input"
+                              placeholder="From Email (e.g. noreply@company.com)"
+                              value={smtpForm[c.id].from_email}
+                              onChange={(e) => setSmtpForm(prev => ({ ...prev, [c.id]: { ...prev[c.id], from_email: e.target.value } }))}
+                            />
+                            <input
+                              className="input"
+                              placeholder="From Name (e.g. Company Name)"
+                              value={smtpForm[c.id].from_name}
+                              onChange={(e) => setSmtpForm(prev => ({ ...prev, [c.id]: { ...prev[c.id], from_name: e.target.value } }))}
+                            />
+                            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, marginTop: 4 }}>
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => handleSaveSmtp(c.id)}
+                                disabled={actionLoading === 'smtp-' + c.id}
+                              >
+                                {actionLoading === 'smtp-' + c.id ? 'Saving...' : 'Save SMTP'}
+                              </button>
+                              {smtpForm[c.id]?._configured && (
+                                <button
+                                  className="btn btn-secondary"
+                                  onClick={() => handleClearSmtp(c.id)}
+                                  disabled={actionLoading === 'smtp-clear-' + c.id}
+                                >
+                                  {actionLoading === 'smtp-clear-' + c.id ? 'Clearing...' : 'Clear (use default)'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-muted text-sm">Loading SMTP settings...</div>
+                        )}
                       </div>
                     </td>
                   </tr>

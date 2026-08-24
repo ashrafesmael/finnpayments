@@ -177,6 +177,9 @@ export const removeUserFromCompany = (companyId, userId) =>
   apiRequest(`/auth/admin/companies/${companyId}/users/${userId}`, { method: 'DELETE' });
 export const toggleMakerChecker = (companyId, enabled) =>
   apiRequest(`/auth/admin/companies/${companyId}/maker-checker`, { method: 'PUT', body: JSON.stringify({ enabled }) });
+export const getCompanySmtp = (companyId) => apiRequest(`/auth/admin/companies/${companyId}/smtp`);
+export const updateCompanySmtp = (companyId, settings) =>
+  apiRequest(`/auth/admin/companies/${companyId}/smtp`, { method: 'PUT', body: JSON.stringify(settings) });
 
 // ─── Export (blob downloads) ────────────────────────────
 async function downloadBlob(endpoint, filename) {

@@ -120,6 +120,12 @@ class AuthDatabase:
                 currency TEXT DEFAULT 'MUR',
                 maker_checker_enabled INTEGER DEFAULT 0,
                 recurring_enabled INTEGER DEFAULT 0,
+                smtp_host TEXT,
+                smtp_port INTEGER,
+                smtp_user TEXT,
+                smtp_password TEXT,
+                from_email TEXT,
+                from_name TEXT,
                 created_at TEXT NOT NULL
             )
         ''')
@@ -229,6 +235,19 @@ class AuthDatabase:
         if not column_exists("companies", "recurring_enabled"):
             cursor.execute("ALTER TABLE companies ADD COLUMN recurring_enabled INTEGER DEFAULT 0")
             logger.info("✅ Added recurring_enabled column to companies")
+
+        # Add per-company SMTP columns for existing DBs
+        for col, decl in [
+            ("smtp_host", "TEXT"),
+            ("smtp_port", "INTEGER"),
+            ("smtp_user", "TEXT"),
+            ("smtp_password", "TEXT"),
+            ("from_email", "TEXT"),
+            ("from_name", "TEXT"),
+        ]:
+            if not column_exists("companies", col):
+                cursor.execute(f"ALTER TABLE companies ADD COLUMN {col} {decl}")
+                logger.info(f"✅ Added {col} column to companies")
         
         conn.commit()
         conn.close()
@@ -429,6 +448,24 @@ class AuthDatabase:
         cursor.execute(
             "UPDATE companies SET recurring_enabled = ? WHERE id = ?",
             (1 if enabled else 0, company_id)
+        )
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def update_company_smtp(self, company_id: str, smtp_host: str = None, smtp_port: int = None,
+                            smtp_user: str = None, smtp_password: str = None,
+                            from_email: str = None, from_name: str = None) -> bool:
+        """Update per-company SMTP settings. Pass None to clear a field."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE companies SET
+                 smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_password = ?,
+                 from_email = ?, from_name = ?
+               WHERE id = ?""",
+            (smtp_host, smtp_port, smtp_user, smtp_password, from_email, from_name, company_id)
         )
         success = cursor.rowcount > 0
         conn.commit()

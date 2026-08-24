@@ -99,8 +99,22 @@ class EmailService:
 
     def _send_email(self, to_email: str, subject: str, html_content: str, from_name: str = None,
                     attachment_bytes: bytes = None, attachment_name: str = None,
-                    attachment_mime: str = "application/pdf") -> bool:
-        """Send an email. Optional from_name and attachment."""
+                    attachment_mime: str = "application/pdf",
+                    smtp_config: dict = None) -> bool:
+        """Send an email. Optional from_name and attachment.
+
+        When smtp_config is provided (dict with keys smtp_host, smtp_port,
+        smtp_user, smtp_password, from_email, from_name), the email is sent
+        via that company's own SMTP server instead of the global default.
+        """
+        if smtp_config and smtp_config.get('smtp_host') and smtp_config.get('from_email'):
+            return self._send_email_smtp(to_email, subject, html_content,
+                                         from_name=from_name or smtp_config.get('from_name'),
+                                         attachment_bytes=attachment_bytes,
+                                         attachment_name=attachment_name,
+                                         attachment_mime=attachment_mime,
+                                         smtp_config=smtp_config)
+
         if not self.enabled:
             logger.info(f"📧 Email not sent (not configured): {subject} -> {to_email}")
             return False
@@ -142,8 +156,54 @@ class EmailService:
         except Exception as e:
             logger.error(f"❌ Failed to send email: {e}")
             return False
+
+    def _send_email_smtp(self, to_email: str, subject: str, html_content: str, from_name: str = None,
+                         attachment_bytes: bytes = None, attachment_name: str = None,
+                         attachment_mime: str = "application/pdf",
+                         smtp_config: dict = None) -> bool:
+        """Send email using a company-specific SMTP config."""
+        try:
+            host = smtp_config['smtp_host']
+            port = int(smtp_config.get('smtp_port') or 587)
+            user = smtp_config.get('smtp_user') or ''
+            password = smtp_config.get('smtp_password') or ''
+            sender = smtp_config['from_email']
+            display_name = from_name or smtp_config.get('from_name') or 'finnpayments'
+
+            if attachment_bytes and attachment_name:
+                msg = MIMEMultipart('mixed')
+                html_part = MIMEMultipart('alternative')
+                html_part.attach(MIMEText(html_content, 'html'))
+                msg.attach(html_part)
+                from email.mime.base import MIMEBase
+                from email import encoders
+                maintype, subtype = attachment_mime.split('/', 1)
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(attachment_bytes)
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
+                msg.attach(part)
+            else:
+                msg = MIMEMultipart('alternative')
+                msg.attach(MIMEText(html_content, 'html'))
+
+            msg['Subject'] = subject
+            msg['From'] = f"{display_name} <{sender}>"
+            msg['To'] = to_email
+
+            with smtplib.SMTP(host, port) as server:
+                server.starttls()
+                if user and password:
+                    server.login(user, password)
+                server.sendmail(sender, to_email, msg.as_string())
+
+            logger.info(f"✅ Email sent via company SMTP ({sender}): {subject} -> {to_email}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to send email via company SMTP: {e}")
+            return False
     
-    def send_registration_confirmation(self, to_email: str, full_name: str) -> bool:
+    def send_registration_confirmation(self, to_email: str, full_name: str, smtp_config: dict = None) -> bool:
         """Send registration confirmation email"""
         subject = "finnpayments - Registration Received"
         html_content = f"""
@@ -185,9 +245,10 @@ class EmailService:
         </body>
         </html>
         """
-        return self._send_email(to_email, subject, html_content)
-    
-    def send_approval_notification(self, to_email: str, full_name: str, login_url: str = "") -> bool:
+        return self._send_email(to_email, subject, html_content, smtp_config=smtp_config)
+
+    def send_approval_notification(self, to_email: str, full_name: str, login_url: str = "",
+                                    smtp_config: dict = None) -> bool:
         """Send account approved notification"""
         subject = "finnpayments - Account Approved ✓"
         html_content = f"""
@@ -237,9 +298,10 @@ class EmailService:
         </body>
         </html>
         """
-        return self._send_email(to_email, subject, html_content)
-    
-    def send_rejection_notification(self, to_email: str, full_name: str, reason: str = "") -> bool:
+        return self._send_email(to_email, subject, html_content, smtp_config=smtp_config)
+
+    def send_rejection_notification(self, to_email: str, full_name: str, reason: str = "",
+                                     smtp_config: dict = None) -> bool:
         """Send account rejected notification"""
         subject = "finnpayments - Account Registration Update"
         reason_text = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
@@ -281,10 +343,11 @@ class EmailService:
             </div>
         </body>
         </html>
-        """
-        return self._send_email(to_email, subject, html_content)
+"""
+        return self._send_email(to_email, subject, html_content, smtp_config=smtp_config)
 
-    def send_password_reset(self, to_email: str, full_name: str, reset_token: str, base_url: str = "") -> bool:
+    def send_password_reset(self, to_email: str, full_name: str, reset_token: str, base_url: str = "",
+                             smtp_config: dict = None) -> bool:
         """Send password reset email with link."""
         if not base_url:
             base_url = os.getenv('SITE_BASE_URL', 'https://payments.finnverify.com')
@@ -330,11 +393,11 @@ class EmailService:
         </body>
         </html>
         """
-        return self._send_email(to_email, subject, html_content)
+        return self._send_email(to_email, subject, html_content, smtp_config=smtp_config)
 
     def send_invoice_approved(self, to_email: str, full_name: str, invoice_number: str,
                               vendor_name: str, amount: float, currency: str, login_url: str = "",
-                              company_name: str = None) -> bool:
+                              company_name: str = None, smtp_config: dict = None) -> bool:
         """Notify that an invoice is approved and needs posting (maker/checker context)."""
         subject = f"finnpayments - Invoice Approved: {invoice_number}"
         if company_name:
@@ -383,7 +446,7 @@ class EmailService:
 
     def send_invoice_rejected(self, to_email: str, full_name: str, invoice_number: str,
                                vendor_name: str, amount: float, currency: str, reason: str = "",
-                               company_name: str = None) -> bool:
+                               company_name: str = None, smtp_config: dict = None) -> bool:
         """Notify that an invoice was rejected."""
         reason_text = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
         subject = f"finnpayments - Invoice Rejected: {invoice_number}"
@@ -427,11 +490,11 @@ class EmailService:
         </body>
         </html>
         """
-        return self._send_email(to_email, subject, html_content)
+        return self._send_email(to_email, subject, html_content, smtp_config=smtp_config)
 
     def send_invoice_posted(self, to_email: str, full_name: str, invoice_number: str,
                             vendor_name: str, amount: float, currency: str, login_url: str = "",
-                            company_name: str = None) -> bool:
+                            company_name: str = None, smtp_config: dict = None) -> bool:
         """Notify that an invoice has been posted to the GL and is ready for payment."""
         reset_link = f'<p><a href="{login_url}" class="btn">View Invoice</a></p>' if login_url else ''
         subject = f"finnpayments - Invoice Posted: {invoice_number}"
@@ -475,12 +538,12 @@ class EmailService:
         </body>
         </html>
         """
-        return self._send_email(to_email, subject, html_content)
+        return self._send_email(to_email, subject, html_content, smtp_config=smtp_config)
 
     def send_new_invoice_uploaded(self, to_email: str, full_name: str, invoice_number: str,
                                    vendor_name: str, amount: float, currency: str, login_url: str = "",
                                    attachment_path: str = None, approve_url: str = None, decline_url: str = None,
-                                   company_name: str = None) -> bool:
+                                   company_name: str = None, smtp_config: dict = None) -> bool:
         """Notify approvers that a new invoice has been uploaded and needs review.
         Optionally attaches the invoice PDF and includes approve/decline buttons."""
         subject = f"finnpayments - New Invoice Needs Review: {invoice_number}"
@@ -552,7 +615,7 @@ class EmailService:
                 logger.error(f"Failed to read attachment {attachment_path}: {e}")
 
         return self._send_email(to_email, subject, html_content, attachment_bytes=attachment_bytes,
-                               attachment_name=attachment_name)
+                               attachment_name=attachment_name, smtp_config=smtp_config)
 
 # Global email service instance
 email_service = EmailService()

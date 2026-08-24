@@ -369,6 +369,63 @@ async def toggle_recurring(
     }
 
 
+class CompanySmtpSettings(BaseModel):
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+
+
+@router.put("/admin/companies/{company_id}/smtp")
+async def update_company_smtp(
+    company_id: str,
+    request: CompanySmtpSettings,
+    admin: dict = Depends(require_admin),
+):
+    """Update per-company SMTP sender settings (admin only).
+
+    When configured, notification emails for this company are sent via
+    the company's own SMTP credentials instead of the global default.
+    """
+    company = auth_db.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    auth_db.update_company_smtp(
+        company_id,
+        smtp_host=request.smtp_host,
+        smtp_port=request.smtp_port,
+        smtp_user=request.smtp_user,
+        smtp_password=request.smtp_password,
+        from_email=request.from_email,
+        from_name=request.from_name,
+    )
+    updated = auth_db.get_company_by_id(company_id)
+    return {
+        "message": f"SMTP settings updated for {company['name']}",
+        "smtp_configured": bool(updated.get('smtp_host') and updated.get('from_email')),
+    }
+
+
+@router.get("/admin/companies/{company_id}/smtp")
+async def get_company_smtp(company_id: str, admin: dict = Depends(require_admin)):
+    """Get per-company SMTP settings (admin only). Password is masked."""
+    company = auth_db.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return {
+        "smtp_host": company.get('smtp_host'),
+        "smtp_port": company.get('smtp_port'),
+        "smtp_user": company.get('smtp_user'),
+        "smtp_password": '•••••' if company.get('smtp_password') else None,
+        "from_email": company.get('from_email'),
+        "from_name": company.get('from_name'),
+        "smtp_configured": bool(company.get('smtp_host') and company.get('from_email')),
+    }
+
+
 @router.get("/admin/companies/{company_id}/users", response_model=list)
 async def get_company_users(company_id: str, admin: dict = Depends(require_admin)):
     """Get users assigned to a company (admin only)"""
