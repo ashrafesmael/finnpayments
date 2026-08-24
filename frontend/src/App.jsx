@@ -7,6 +7,7 @@ import {
   postJournalEntry, reverseJournalEntry, getChartOfAccounts, checkHealth,
   exportJournalEntriesExcel,
   exportJournalEntriesSage200,
+  createSageExportBatch, getSagePendingCount, getSageBatches, downloadSageBatch, markSageBatchFailed,
   bulkApprove, bulkPost, bulkDelete,
   updateInvoiceTds, markTdsRemitted, getTdsRates, createTdsRate, updateTdsRate, deleteTdsRate, getTdsRegister,
   getAuditLog,
@@ -1546,8 +1547,14 @@ function JournalEntries() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [page, setPage] = useState(1);
+  const [sagePending, setSagePending] = useState(null);
+  const [sageBusy, setSageBusy] = useState(false);
   const pageSize = 50;
   const { user, selectedCompany } = useAuth();
+
+  const loadSagePending = useCallback(async () => {
+    try { const r = await getSagePendingCount(); setSagePending(r.pending); } catch (e) {}
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1561,18 +1568,30 @@ function JournalEntries() {
   }, [filter, page]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSagePending(); }, [loadSagePending]);
   useEffect(() => { setPage(1); }, [filter]);
+
+  const handleSageExport = async () => {
+    setSageBusy(true);
+    try {
+      const batch = await createSageExportBatch();
+      await downloadSageBatch(batch.batch_id, batch.filename);
+      alert(`${batch.message}\nTotal: Dr ${batch.total_debit.toLocaleString()} / Cr ${batch.total_credit.toLocaleString()}`);
+      await load();
+      await loadSagePending();
+    } catch (e) { alert(e.message); }
+    finally { setSageBusy(false); }
+  };
 
   return (
     <div className="animate-fade-in space-y">
       <div className="page-header">
         <h2>Journal Entries</h2>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary" onClick={handleSageExport} disabled={sageBusy || !sagePending} title="Create a Sage 200 export batch from all posted entries not yet exported">
+            {sageBusy ? 'Creating...' : `Export to Sage 200${sagePending !== null && sagePending > 0 ? ` (${sagePending})` : ''}`}
+          </button>
           <button className="btn" onClick={async () => {
-            try { await exportJournalEntriesSage200(filter || 'posted'); }
-            catch (e) { alert(e.message); }
-          }}>Export to Sage 200</button>
-          <button className="btn btn-primary" onClick={async () => {
             try { await exportJournalEntriesExcel(filter || 'posted'); }
             catch (e) { alert(e.message); }
           }}><Icons.Download /> Export to Excel</button>
@@ -1626,13 +1645,87 @@ function JournalEntries() {
         </div>
       ))}
       <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} />
+
+      <SageExportHistory onChanged={() => { load(); loadSagePending(); }} />
     </div>
   );
 }
 
 /* ═══════════════════════════════════════════════════════
-   CHART OF ACCOUNTS
+   SAGE EXPORT BATCHES
    ═══════════════════════════════════════════════════════ */
+function SageExportHistory({ onChanged }) {
+  const [batches, setBatches] = useState([]);
+  const [expanded, setExpanded] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setBatches(await getSageBatches()); } catch (e) {}
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleDownload = async (b) => {
+    try { await downloadSageBatch(b.batch_id, b.filename); }
+    catch (e) { alert(e.message); }
+  };
+
+  const handleMarkFailed = async (b) => {
+    if (!confirm(`Mark batch ${b.batch_id} as failed and release its ${b.entry_count} entries for re-export? Use this only if the import failed in Sage.`)) return;
+    try {
+      await markSageBatchFailed(b.batch_id);
+      await load();
+      if (onChanged) onChanged();
+    } catch (e) { alert(e.message); }
+  };
+
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setExpanded(!expanded)}>
+        <h3>Sage Export Batches ({batches.length})</h3>
+        <span className="text-muted">{expanded ? '▲' : '▼'}</span>
+      </div>
+      {expanded && (
+        <div style={{ padding: 16 }}>
+          {batches.length === 0 ? (
+            <p className="text-muted text-sm" style={{ margin: 0 }}>No export batches yet. Click "Export to Sage 200" to create one.</p>
+          ) : (
+            <table className="data-table" style={{ fontSize: 13 }}>
+              <thead>
+                <tr><th>Batch</th><th>File</th><th>Entries</th><th>Total (Dr)</th><th>Created</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                {batches.map(b => (
+                  <tr key={b.batch_id}>
+                    <td className="mono text-xs text-accent">{b.batch_id}</td>
+                    <td className="mono text-xs">{b.filename}</td>
+                    <td className="text-sm">{b.entry_count}</td>
+                    <td className="mono text-sm">{fmtCurrency(b.total_debit, 'MUR')}</td>
+                    <td className="text-muted text-xs">{fmtDate(b.created_at)}</td>
+                    <td>
+                      <span className={`badge ${b.status === 'exported' ? 'badge-posted' : b.status === 'failed' ? 'badge-rejected' : 'badge-pending_review'}`}>{b.status}</span>
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap', display: 'flex', gap: 4 }}>
+                      <button className="btn btn-sm" onClick={() => handleDownload(b)}>Download</button>
+                      {b.status === 'exported' && (
+                        <button className="btn btn-sm" onClick={() => handleMarkFailed(b)} title="Import failed in Sage — release entries for re-export" style={{ color: 'var(--red)' }}>Undo</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="text-muted text-xs" style={{ marginTop: 8 }}>
+            Import via Sage 200 Evolution: General Ledger → Transactions → Journal Batches → New Batch → Batch → Import.
+            If an import fails in Sage, click "Undo" to release those entries into the next batch.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function LearnedRules() {
   const [rules, setRules] = useState([]);
@@ -1698,6 +1791,9 @@ function LearnedRules() {
   );
 }
 
+/* ═══════════════════════════════════════════════════════
+   CHART OF ACCOUNTS
+   ═══════════════════════════════════════════════════════ */
 function ChartOfAccounts() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);

@@ -210,6 +210,31 @@ export const exportJournalEntriesExcel = (status = 'posted') =>
 export const exportJournalEntriesSage200 = (status = 'posted', transactionType = 'JL') =>
   downloadBlob(`/accounting/export/sage200?status=${status}&transaction_type=${transactionType}`, `Sage200_GL_Journal_${status}_${transactionType}_${new Date().toISOString().slice(0,10)}.csv`);
 
+// ─── Sage 200 Sync (batched export) ─────────────────────
+export const createSageExportBatch = (transactionType = 'JL') =>
+  apiRequest(`/accounting/sage/export?transaction_type=${transactionType}`, { method: 'POST' });
+
+export const getSagePendingCount = () => apiRequest('/accounting/sage/pending-count');
+
+export const getSageBatches = () => apiRequest('/accounting/sage/batches');
+
+export const downloadSageBatch = async (batchId, filename) => {
+  const response = await fetch(`${API_BASE}/accounting/sage/batches/${batchId}/download`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Download failed');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || `${batchId}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+export const markSageBatchFailed = (batchId) =>
+  apiRequest(`/accounting/sage/batches/${batchId}/mark-failed`, { method: 'POST' });
+
 // ─── Document Viewer ────────────────────────────────────
 export const getInvoiceDocumentUrl = (invoiceId) => {
   return `${API_BASE}/invoices/${invoiceId}/document`;

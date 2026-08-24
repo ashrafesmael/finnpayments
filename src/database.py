@@ -141,8 +141,30 @@ class JournalEntryDB(Base):
     approved_by = Column(String(50))
     posted_by = Column(String(50))
 
+    # Sage 200 Evolution sync tracking
+    sage_export_batch_id = Column(String(50), index=True)
+    exported_at = Column(DateTime)
+
     invoice = relationship("Invoice", back_populates="journal_entries")
     lines = relationship("JournalEntryLineDB", back_populates="journal_entry", cascade="all, delete-orphan")
+
+
+class SageExportBatch(Base):
+    __tablename__ = "sage_export_batches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(50), unique=True, nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    entry_count = Column(Integer, default=0)
+    total_debit = Column(Float, default=0.0)
+    total_credit = Column(Float, default=0.0)
+    status = Column(String(20), default="exported")  # exported | imported | failed
+    transaction_type = Column(String(10), default="JL")
+    exported_by = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Multi-company
+    company_id = Column(String(50), index=True)
 
 
 class JournalEntryLineDB(Base):
@@ -396,6 +418,12 @@ def _migrate_business_db():
     if not column_exists("invoices", "assigned_to"):
         cursor.execute("ALTER TABLE invoices ADD COLUMN assigned_to TEXT")
         logger.info("✅ Added assigned_to column to invoices")
+
+    # Add Sage export tracking columns to journal_entries
+    for col, coltype in [("sage_export_batch_id", "TEXT"), ("exported_at", "DATETIME")]:
+        if not column_exists("journal_entries", col):
+            cursor.execute(f"ALTER TABLE journal_entries ADD COLUMN {col} {coltype}")
+            logger.info(f"✅ Added {col} column to journal_entries")
 
     conn.commit()
 

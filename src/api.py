@@ -3503,6 +3503,215 @@ async def export_journal_entries_sage200(
         filename=filename,
     )
 
+
+# ─── Sage 200 Evolution Sync (Phase 1: Batched Export) ───
+
+SAGE_EXPORT_DIR = Path("exports") / "sage"
+
+
+def _sage_clean_text(value: str, max_len: int = 100) -> str:
+    """Strip Sage-illegal characters and whitespace."""
+    import re as _re
+    if not value:
+        return ""
+    value = str(value).strip()
+    value = _re.sub(r"[,;:'\"<>*&$@/\\()]", "", value)
+    value = _re.sub(r"\s+", " ", value)
+    return value[:max_len]
+
+
+def _sage_format_date(date_str: str) -> str:
+    """Convert YYYY-MM-DD to dd/mm/yyyy for Sage."""
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+        return dt.strftime("%d/%m/%Y")
+    except (ValueError, TypeError):
+        return date_str
+
+
+def _sage_fmt_amount(value) -> str:
+    return f"{float(value or 0):.2f}"
+
+
+@app.post("/accounting/sage/export")
+async def create_sage_export_batch(
+    transaction_type: str = "JL",
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Create a Sage 200 Evolution export batch from all posted entries
+    that have not been exported yet. Returns the batch info."""
+    import csv
+
+    with get_db() as db:
+        entries = db.query(JournalEntryDB).filter(
+            JournalEntryDB.company_id == company['id'],
+            JournalEntryDB.status == "posted",
+            JournalEntryDB.sage_export_batch_id.is_(None),
+        ).order_by(JournalEntryDB.entry_date.asc(), JournalEntryDB.created_at.asc()).all()
+
+        if not entries:
+            raise HTTPException(status_code=404, detail="No new posted entries to export")
+
+        # Generate batch id + filename
+        now = datetime.now()
+        today_count = db.query(SageExportBatch).filter(
+            SageExportBatch.company_id == company['id'],
+            SageExportBatch.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0),
+        ).count()
+        seq = today_count + 1
+        batch_id = f"SE-{now.strftime('%Y%m%d')}-{seq:03d}"
+        filename = f"SAGE200_JL_{now.strftime('%Y%m%d')}_{seq:03d}.csv"
+
+        # Write CSV to exports/sage/{company_id}/
+        out_dir = SAGE_EXPORT_DIR / company['id']
+        out_dir.mkdir(parents=True, exist_ok=True)
+        file_path = out_dir / filename
+
+        total_debit, total_credit = 0.0, 0.0
+        with open(file_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Date", "AccountCode", "TransactionType", "Reference", "Description", "Debit", "Credit"])
+            for entry in entries:
+                ref = _sage_clean_text(entry.reference or (entry.invoice.invoice_number if entry.invoice else ""), 30)
+                for line in entry.lines:
+                    writer.writerow([
+                        _sage_format_date(entry.entry_date),
+                        _sage_clean_text(line.account_code, 20),
+                        transaction_type,
+                        ref,
+                        _sage_clean_text(line.description or "", 100),
+                        _sage_fmt_amount(line.debit),
+                        _sage_fmt_amount(line.credit),
+                    ])
+                    total_debit += line.debit or 0
+                    total_credit += line.credit or 0
+
+        # Record the batch
+        batch = SageExportBatch(
+            batch_id=batch_id,
+            filename=filename,
+            entry_count=len(entries),
+            total_debit=round(total_debit, 2),
+            total_credit=round(total_credit, 2),
+            transaction_type=transaction_type,
+            exported_by=user.get('email', user.get('id', 'system')),
+            company_id=company['id'],
+        )
+        db.add(batch)
+
+        # Stamp all entries with this batch
+        stamp = datetime.utcnow()
+        for entry in entries:
+            entry.sage_export_batch_id = batch_id
+            entry.exported_at = stamp
+
+        db.commit()
+
+        log_audit("sage_export_created", user, entity_type="sage_batch", entity_id=batch_id,
+                  description=f"Sage export batch {batch_id} created: {len(entries)} entries",
+                  company_id=company['id'])
+
+        return {
+            "batch_id": batch_id,
+            "filename": filename,
+            "entry_count": len(entries),
+            "total_debit": round(total_debit, 2),
+            "total_credit": round(total_credit, 2),
+            "download_url": f"/accounting/sage/batches/{batch_id}/download",
+            "message": f"Batch {batch_id} created with {len(entries)} journal entries",
+        }
+
+
+@app.get("/accounting/sage/pending-count")
+async def sage_pending_count(company: dict = Depends(get_current_company)):
+    """Count posted entries not yet exported to Sage."""
+    with get_db() as db:
+        count = db.query(JournalEntryDB).filter(
+            JournalEntryDB.company_id == company['id'],
+            JournalEntryDB.status == "posted",
+            JournalEntryDB.sage_export_batch_id.is_(None),
+        ).count()
+        return {"pending": count}
+
+
+@app.get("/accounting/sage/batches")
+async def list_sage_batches(company: dict = Depends(get_current_company)):
+    """List all Sage export batches for the company."""
+    with get_db() as db:
+        batches = db.query(SageExportBatch).filter(
+            SageExportBatch.company_id == company['id']
+        ).order_by(SageExportBatch.id.desc()).all()
+        return [{
+            "batch_id": b.batch_id,
+            "filename": b.filename,
+            "entry_count": b.entry_count,
+            "total_debit": b.total_debit,
+            "total_credit": b.total_credit,
+            "status": b.status,
+            "exported_by": b.exported_by,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+        } for b in batches]
+
+
+@app.get("/accounting/sage/batches/{batch_id}/download")
+async def download_sage_batch(
+    batch_id: str,
+    company: dict = Depends(get_current_company),
+):
+    """Download a previously generated Sage export batch CSV."""
+    with get_db() as db:
+        batch = db.query(SageExportBatch).filter(
+            SageExportBatch.batch_id == batch_id,
+            SageExportBatch.company_id == company['id']
+        ).first()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        file_path = SAGE_EXPORT_DIR / company['id'] / batch.filename
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Export file not found on disk")
+
+        return FileResponse(
+            str(file_path),
+            media_type="text/csv",
+            filename=batch.filename,
+        )
+
+
+@app.post("/accounting/sage/batches/{batch_id}/mark-failed")
+async def mark_sage_batch_failed(
+    batch_id: str,
+    company: dict = Depends(get_current_company),
+    user: dict = Depends(get_current_user),
+):
+    """Mark a batch as failed in Sage and release its entries back to the
+    pending pool so they are included in the next export."""
+    with get_db() as db:
+        batch = db.query(SageExportBatch).filter(
+            SageExportBatch.batch_id == batch_id,
+            SageExportBatch.company_id == company['id']
+        ).first()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        if batch.status != "exported":
+            raise HTTPException(status_code=400, detail=f"Cannot re-open batch with status '{batch.status}'")
+
+        released = db.query(JournalEntryDB).filter(
+            JournalEntryDB.sage_export_batch_id == batch_id
+        ).update({"sage_export_batch_id": None, "exported_at": None}, synchronize_session=False)
+
+        batch.status = "failed"
+        db.commit()
+
+        log_audit("sage_export_failed", user, entity_type="sage_batch", entity_id=batch_id,
+                  description=f"Sage batch {batch_id} marked failed; {released} entries released for re-export",
+                  company_id=company['id'])
+
+        return {"message": f"Batch {batch_id} marked failed; {released} entries will be included in the next export"}
+
 @app.get("/accounting/suggest-account")
 async def suggest_account(description: str, type: str = "supplier", company: dict = Depends(get_current_company)):
     """AI-powered account code suggestion"""
