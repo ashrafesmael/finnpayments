@@ -378,6 +378,42 @@ class CompanySmtpSettings(BaseModel):
     from_name: Optional[str] = None
 
 
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = None
+    currency: Optional[str] = None
+
+
+@router.put("/admin/companies/{company_id}")
+async def update_company(
+    company_id: str,
+    request: CompanyUpdate,
+    admin: dict = Depends(require_admin),
+):
+    """Update company name or currency (admin only)."""
+    company = auth_db.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    updates = {}
+    if request.name is not None and request.name.strip():
+        updates['name'] = request.name.strip()
+    if request.currency is not None:
+        updates['currency'] = request.currency.strip().upper()
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    if not auth_db.update_company(company_id, **updates):
+        raise HTTPException(status_code=500, detail="Failed to update company")
+
+    updated = auth_db.get_company_by_id(company_id)
+    return {
+        "message": f"Company updated",
+        "name": updated['name'],
+        "currency": updated['currency'],
+    }
+
+
 @router.put("/admin/companies/{company_id}/smtp")
 async def update_company_smtp(
     company_id: str,

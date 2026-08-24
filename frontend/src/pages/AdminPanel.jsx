@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
-  getCompanies, createCompany, deleteCompany,
+  getCompanies, createCompany, deleteCompany, updateCompany,
   getCompanyUsers, assignUserToCompany, removeUserFromCompany,
   toggleMakerChecker, getCompanySmtp, updateCompanySmtp,
 } from '../services/api';
@@ -22,6 +22,8 @@ const AdminPanel = () => {
   const [companyUsers, setCompanyUsers] = useState({});
   const [expandedCompany, setExpandedCompany] = useState(null);
   const [assignEmail, setAssignEmail] = useState({});
+  const [editingCompany, setEditingCompany] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
   useEffect(() => {
     fetchUsers();
@@ -42,9 +44,28 @@ const AdminPanel = () => {
     } catch (err) {
       setError('Error fetching users: ' + err.message);
     } finally {
-      setLoading(false);
+      setActionLoading(null);
     }
   };
+
+  const startEditCompany = (c) => {
+    setEditingCompany(c.id);
+    setEditForm({ name: c.name, currency: c.currency });
+  };
+
+  const handleSaveCompany = async (companyId) => {
+    setActionLoading('edit-company-' + companyId);
+    try {
+      await updateCompany(companyId, editForm);
+      await fetchCompanies();
+      setEditingCompany(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
 
   const fetchCompanies = async () => {
     try {
@@ -383,8 +404,35 @@ const AdminPanel = () => {
               <React.Fragment key={c.id}>
                 <tr>
                   <td className="mono text-sm" style={{ fontWeight: 600, color: 'var(--accent)' }}>{c.code}</td>
-                  <td style={{ fontWeight: 500 }}>{c.name}</td>
-                  <td className="text-muted text-sm">{c.currency}</td>
+                  <td style={{ fontWeight: 500 }}>
+                    {editingCompany === c.id ? (
+                      <input
+                        className="input"
+                        style={{ width: '100%', minWidth: 200 }}
+                        value={editForm.name || ''}
+                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                        autoFocus
+                      />
+                    ) : c.name}
+                  </td>
+                  <td>
+                    {editingCompany === c.id ? (
+                      <select
+                        className="input"
+                        style={{ width: 80 }}
+                        value={editForm.currency || 'MUR'}
+                        onChange={(e) => setEditForm({ ...editForm, currency: e.target.value })}
+                      >
+                        <option value="MUR">MUR</option>
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="GBP">GBP</option>
+                        <option value="ZAR">ZAR</option>
+                      </select>
+                    ) : (
+                      <span className="text-muted text-sm">{c.currency}</span>
+                    )}
+                  </td>
                   <td>
                     <label className="mc-toggle" title="Enable maker/checker (requires 2+ users)">
                       <input
@@ -398,15 +446,35 @@ const AdminPanel = () => {
                   </td>
                   <td className="text-sm">{c.user_count || 0}</td>
                   <td className="action-buttons">
-                    <button className="btn-role" onClick={() => toggleCompanyExpand(c.id)} title="Manage users">
-                      {expandedCompany === c.id ? '▲' : '▼'}
-                    </button>
-                    <button
-                      className="btn-delete"
-                      onClick={() => handleDeleteCompany(c.id)}
-                      disabled={actionLoading === 'delete-' + c.id}
-                      title="Delete company"
-                    >×</button>
+                    {editingCompany === c.id ? (
+                      <>
+                        <button
+                          className="btn btn-sm btn-primary"
+                          onClick={() => handleSaveCompany(c.id)}
+                          disabled={actionLoading === 'edit-company-' + c.id}
+                        >
+                          {actionLoading === 'edit-company-' + c.id ? 'Saving...' : 'Save'}
+                        </button>
+                        <button className="btn btn-sm" onClick={() => setEditingCompany(null)}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn-role" onClick={() => toggleCompanyExpand(c.id)} title="Manage users & settings">
+                          {expandedCompany === c.id ? '▲' : '▼'}
+                        </button>
+                        <button
+                          className="btn-role"
+                          onClick={() => startEditCompany(c)}
+                          title="Edit company"
+                        >✎</button>
+                        <button
+                          className="btn-delete"
+                          onClick={() => handleDeleteCompany(c.id)}
+                          disabled={actionLoading === 'delete-' + c.id}
+                          title="Delete company"
+                        >×</button>
+                      </>
+                    )}
                   </td>
                 </tr>
                 {expandedCompany === c.id && (

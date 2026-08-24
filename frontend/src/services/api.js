@@ -171,6 +171,8 @@ export const createCompany = (code, name, currency = 'MUR') =>
   apiRequest('/auth/admin/companies', { method: 'POST', body: JSON.stringify({ code, name, currency }) });
 export const deleteCompany = (companyId) =>
   apiRequest(`/auth/admin/companies/${companyId}`, { method: 'DELETE' });
+export const updateCompany = (companyId, updates) =>
+  apiRequest(`/auth/admin/companies/${companyId}`, { method: 'PUT', body: JSON.stringify(updates) });
 export const getCompanyUsers = (companyId) => apiRequest(`/auth/admin/companies/${companyId}/users`);
 export const assignUserToCompany = (companyId, userId) =>
   apiRequest(`/auth/admin/companies/${companyId}/users/${userId}`, { method: 'POST' });

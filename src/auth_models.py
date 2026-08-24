@@ -471,6 +471,22 @@ class AuthDatabase:
         conn.commit()
         conn.close()
         return success
+
+    def update_company(self, company_id: str, **kwargs) -> bool:
+        """Update company fields (name, currency, etc.)."""
+        allowed = {'name', 'currency', 'code'}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        set_clause = ", ".join([f"{k} = ?" for k in updates])
+        values = list(updates.values()) + [company_id]
+        cursor.execute(f"UPDATE companies SET {set_clause} WHERE id = ?", values)
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
     
     def get_company_user_count(self, company_id: str) -> int:
         """Count users assigned to a company (for maker/checker validation)."""
