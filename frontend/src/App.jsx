@@ -1015,6 +1015,9 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
     }
   };
 
+  const [viewingAtt, setViewingAtt] = useState(null);
+  const [viewUrl, setViewUrl] = useState(null);
+
   const handleView = async (att) => {
     try {
       const API_URL = import.meta.env.VITE_API_URL || '';
@@ -1026,11 +1029,17 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
       if (!resp.ok) throw new Error('Failed to load document');
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setViewUrl(url);
+      setViewingAtt(att);
     } catch (err) {
       setError(err.message);
     }
+  };
+
+  const closeViewer = () => {
+    if (viewUrl) URL.revokeObjectURL(viewUrl);
+    setViewUrl(null);
+    setViewingAtt(null);
   };
 
   const fmtSize = (bytes) => {
@@ -1094,6 +1103,27 @@ function SupportingDocuments({ invoiceId, invoice, onRefresh }) {
           </p>
         )}
       </div>
+
+      {viewingAtt && viewUrl && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 2000, display: 'flex', flexDirection: 'column' }}
+          onClick={closeViewer}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', color: '#fff' }} onClick={(e) => e.stopPropagation()}>
+            <span style={{ fontSize: 14, fontWeight: 500 }}>{viewingAtt.filename}</span>
+            <button className="btn btn-sm" onClick={closeViewer} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>✕ Close</button>
+          </div>
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'auto', padding: 16 }} onClick={(e) => e.stopPropagation()}>
+            {viewingAtt.mime_type && viewingAtt.mime_type.startsWith('image/') ? (
+              <img src={viewUrl} alt={viewingAtt.filename} style={{ maxWidth: '100%', maxHeight: '85vh', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }} />
+            ) : (
+              <object data={viewUrl} type="application/pdf" style={{ width: '100%', maxWidth: 900, height: '85vh' }}>
+                <p style={{ color: '#fff' }}>Unable to display PDF in browser.</p>
+              </object>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
