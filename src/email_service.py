@@ -543,9 +543,14 @@ class EmailService:
     def send_new_invoice_uploaded(self, to_email: str, full_name: str, invoice_number: str,
                                    vendor_name: str, amount: float, currency: str, login_url: str = "",
                                    attachment_path: str = None, approve_url: str = None, decline_url: str = None,
-                                   company_name: str = None, smtp_config: dict = None) -> bool:
+                                   company_name: str = None, smtp_config: dict = None,
+                                   attachment_bytes: bytes = None, attachment_name: str = None) -> bool:
         """Notify approvers that a new invoice has been uploaded and needs review.
-        Optionally attaches the invoice PDF and includes approve/decline buttons."""
+        Optionally attaches the invoice PDF and includes approve/decline buttons.
+
+        If attachment_bytes is provided, uses those directly. Otherwise falls back
+        to reading attachment_path from disk.
+        """
         subject = f"finnpayments - New Invoice Needs Review: {invoice_number}"
         if company_name:
             subject += f" ({company_name})"
@@ -604,13 +609,11 @@ class EmailService:
         </html>
         """
         # Read attachment file if provided
-        attachment_bytes = None
-        attachment_name = None
-        if attachment_path and os.path.exists(attachment_path):
+        if attachment_bytes is None and attachment_path and os.path.exists(attachment_path):
             try:
                 with open(attachment_path, 'rb') as f:
                     attachment_bytes = f.read()
-                attachment_name = os.path.basename(attachment_path)
+                attachment_name = attachment_name or os.path.basename(attachment_path)
             except Exception as e:
                 logger.error(f"Failed to read attachment {attachment_path}: {e}")
 
