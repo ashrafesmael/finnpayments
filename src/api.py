@@ -37,7 +37,7 @@ from src.database import (
     init_db, get_db, Invoice, InvoiceLineItemDB,
     JournalEntryDB, JournalEntryLineDB, ChartOfAccountsDB, ClassificationRule,
     TDSRate, SessionLocal, AuditLog, Vendor, RecurringTemplate,
-    ExchangeRate, get_exchange_rate, fetch_exchange_rates, InvoiceAttachment,
+    ExchangeRate, get_exchange_rate, fetch_exchange_rates, InvoiceAttachment, SageExportBatch,
 )
 from src.invoice_engine import process_invoice, generate_invoice_id
 from src.accounting_engine import (
